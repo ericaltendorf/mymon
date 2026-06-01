@@ -1,5 +1,10 @@
 //! Application state: owns the [`Monitor`], the latest [`Snapshot`], and the
 //! rolling histories that feed the time-series graphs.
+//!
+//! Collection runs on two independent cadences so the app sleeps most of the
+//! time: cheap stats (CPU/memory/GPU/network/disk) refresh on `stats_interval`
+//! for smooth graphs, while the expensive process scan refreshes on the slower
+//! `process_interval`.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -33,42 +38,82 @@ impl History {
 
 pub struct App {
     monitor: Monitor,
-    pub snapshot: Option<Snapshot>,
+    pub snapshot: Snapshot,
+    /// False until the first stats sample lands.
+    pub ready: bool,
     pub cpu_history: History,
     pub mem_history: History,
     pub gpu_history: History,
-    pub tick_rate: Duration,
-    pub last_tick: Instant,
+    pub stats_interval: Duration,
+    pub process_interval: Duration,
+    last_stats: Instant,
+    last_process: Instant,
     pub should_quit: bool,
 }
 
 impl App {
-    pub fn new(tick_rate: Duration) -> Self {
-        App {
+    pub fn new(stats_interval: Duration, process_interval: Duration) -> Self {
+        let mut app = App {
             monitor: Monitor::new(),
-            snapshot: None,
+            snapshot: Snapshot::default(),
+            ready: false,
             cpu_history: History::default(),
             mem_history: History::default(),
             gpu_history: History::default(),
-            tick_rate,
-            last_tick: Instant::now(),
+            stats_interval,
+            process_interval,
+            last_stats: Instant::now(),
+            last_process: Instant::now(),
             should_quit: false,
-        }
+        };
+        // Prime once so the first frame has data (processes included).
+        app.on_stats_tick();
+        app.on_process_tick();
+        app
     }
 
-    /// Sample all subsystems and append to the histories.
-    pub fn on_tick(&mut self) {
-        let snap = self.monitor.refresh();
+    /// Refresh the cheap stats and append to the histories.
+    pub fn on_stats_tick(&mut self) {
+        self.monitor.refresh_stats(&mut self.snapshot);
+        self.cpu_history.push(self.snapshot.cpu.global_usage as f64);
+        self.mem_history
+            .push(self.snapshot.memory.used_fraction() * 100.0);
+        self.gpu_history.push(mean_gpu_util(&self.snapshot));
+        self.ready = true;
+        self.last_stats = Instant::now();
+    }
 
-        self.cpu_history.push(snap.cpu.global_usage as f64);
-        self.mem_history.push(snap.memory.used_fraction() * 100.0);
+    /// Refresh the (expensive) process table.
+    pub fn on_process_tick(&mut self) {
+        self.monitor.refresh_processes(&mut self.snapshot);
+        self.last_process = Instant::now();
+    }
 
-        // Aggregate GPU utilization as the mean across all GPUs.
-        let gpu_util = mean_gpu_util(&snap);
-        self.gpu_history.push(gpu_util);
+    /// Run any due ticks. Returns true if anything was refreshed (redraw hint).
+    pub fn update(&mut self) -> bool {
+        let now = Instant::now();
+        let mut refreshed = false;
+        if now.duration_since(self.last_stats) >= self.stats_interval {
+            self.on_stats_tick();
+            refreshed = true;
+        }
+        if now.duration_since(self.last_process) >= self.process_interval {
+            self.on_process_tick();
+            refreshed = true;
+        }
+        refreshed
+    }
 
-        self.snapshot = Some(snap);
-        self.last_tick = Instant::now();
+    /// How long the event loop may block before the next tick is due.
+    pub fn time_until_next_tick(&self) -> Duration {
+        let now = Instant::now();
+        let until_stats = self
+            .stats_interval
+            .saturating_sub(now.duration_since(self.last_stats));
+        let until_process = self
+            .process_interval
+            .saturating_sub(now.duration_since(self.last_process));
+        until_stats.min(until_process)
     }
 }
 

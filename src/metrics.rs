@@ -19,12 +19,20 @@
 
 use std::time::Duration;
 
-/// A complete sample of system state at one instant.
-#[derive(Debug, Clone)]
+/// A sample of system state at one instant.
+///
+/// The fields fall into two groups with different refresh cadences: the cheap
+/// "stats" (CPU/memory/GPU/network/disk) are refreshed frequently for smooth
+/// graphs, while [`processes`](Snapshot::processes) — which requires scanning
+/// all of `/proc` and is by far the most expensive part — is refreshed less
+/// often. The two are updated in place by
+/// [`Monitor::refresh_stats`](crate::monitor::Monitor::refresh_stats) and
+/// [`Monitor::refresh_processes`](crate::monitor::Monitor::refresh_processes).
+#[derive(Debug, Clone, Default)]
 pub struct Snapshot {
-    /// Wall-clock time the snapshot was taken (seconds since the Unix epoch).
+    /// Wall-clock time the stats were taken (seconds since the Unix epoch).
     pub unix_time: u64,
-    /// Time elapsed since the previous refresh; rates are computed against this.
+    /// Time elapsed since the previous stats refresh; rates use this.
     pub interval: Duration,
     /// Static-ish host information.
     pub host: HostInfo,
@@ -36,6 +44,9 @@ pub struct Snapshot {
     pub disks: Vec<DiskMetrics>,
     /// NVIDIA GPUs, empty if NVML is unavailable or there are no GPUs.
     pub gpus: Vec<GpuMetrics>,
+    /// Total number of processes seen at the last process refresh.
+    pub process_count: usize,
+    /// Per-process detail, refreshed on the slower process cadence.
     pub processes: Vec<ProcessMetrics>,
 }
 

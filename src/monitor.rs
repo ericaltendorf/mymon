@@ -68,48 +68,69 @@ impl Monitor {
 
     /// Refresh every subsystem and produce a fresh [`Snapshot`].
     ///
+    /// Refresh the cheap "stats" subsystems (CPU, memory, GPU, network, disk,
+    /// thermals) and update them in `snap` in place. Leaves
+    /// [`Snapshot::processes`] untouched.
+    ///
+    /// Only the subsystems the UI actually shows (CPU, memory, GPU) are
+    /// refreshed here — reading thermal sensors (`hwmon`) and `statvfs`-ing every
+    /// mount were the bulk of the cost and aren't displayed yet. Call
+    /// [`refresh_peripherals`](Self::refresh_peripherals) when a network/disk/
+    /// temperature panel needs them.
+    ///
     /// For accurate CPU and rate figures, call this no faster than
     /// [`sysinfo::MINIMUM_CPU_UPDATE_INTERVAL`] apart.
-    pub fn refresh(&mut self) -> Snapshot {
+    pub fn refresh_stats(&mut self, snap: &mut Snapshot) {
         let now = Instant::now();
         let interval = now.duration_since(self.last_refresh);
         self.last_refresh = now;
-        // Avoid division by zero when computing rates on the very first tick.
-        let secs = interval.as_secs_f64().max(1e-3);
 
-        // --- CPU & memory ---
         self.system.refresh_cpu_all();
         self.system.refresh_memory();
 
-        // --- Processes ---
+        snap.unix_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        snap.interval = interval;
+        snap.host = self.collect_host();
+        snap.cpu = self.collect_cpu();
+        snap.memory = self.collect_memory();
+        snap.gpus = self.collect_gpus();
+    }
+
+    /// Refresh the peripherals the hot path skips (network, disk, thermals) and
+    /// update them in `snap`. Comparatively expensive (`hwmon` + `statvfs`), so
+    /// call this only when a panel that needs them is on screen.
+    #[allow(dead_code)] // wired up when network/disk/temperature panels land
+    pub fn refresh_peripherals(&mut self, snap: &mut Snapshot) {
+        let secs = snap.interval.as_secs_f64().max(1e-3);
+        self.networks.refresh(true);
+        self.disks
+            .refresh_specifics(false, DiskRefreshKind::everything().with_io_usage());
+        self.components.refresh(false);
+        snap.temperatures = self.collect_temperatures();
+        snap.networks = self.collect_networks(secs);
+        snap.disks = self.collect_disks(secs);
+    }
+
+    /// Refresh the process table (the expensive part: a full `/proc` scan) and
+    /// rebuild [`Snapshot::processes`] in place. Uses `snap.gpus` to attribute
+    /// GPU memory to processes, so call [`refresh_stats`](Self::refresh_stats)
+    /// first when you want fresh GPU figures.
+    pub fn refresh_processes(&mut self, snap: &mut Snapshot) {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing()
                 .with_memory()
                 .with_cpu()
-                .with_disk_usage()
-                .with_user(sysinfo::UpdateKind::OnlyIfNotSet)
-                .with_exe(sysinfo::UpdateKind::OnlyIfNotSet),
+                .with_user(sysinfo::UpdateKind::OnlyIfNotSet),
         );
-
-        // --- Peripherals ---
-        self.networks.refresh(true);
-        self.disks
-            .refresh_specifics(false, DiskRefreshKind::everything().with_io_usage());
-        self.components.refresh(false);
-
-        let host = self.collect_host();
-        let cpu = self.collect_cpu();
-        let memory = self.collect_memory();
-        let temperatures = self.collect_temperatures();
-        let networks = self.collect_networks(secs);
-        let disks = self.collect_disks(secs);
-        let gpus = self.collect_gpus();
 
         // Map pid -> GPU memory so per-process rows can show GPU usage.
         let mut gpu_mem_by_pid: HashMap<u32, u64> = HashMap::new();
-        for gpu in &gpus {
+        for gpu in &snap.gpus {
             for p in &gpu.processes {
                 if let Some(mem) = p.used_memory {
                     *gpu_mem_by_pid.entry(p.pid).or_insert(0) += mem;
@@ -117,23 +138,8 @@ impl Monitor {
             }
         }
 
-        let processes = self.collect_processes(secs, &gpu_mem_by_pid);
-
-        Snapshot {
-            unix_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            interval,
-            host,
-            cpu,
-            memory,
-            temperatures,
-            networks,
-            disks,
-            gpus,
-            processes,
-        }
+        snap.processes = self.collect_processes(&gpu_mem_by_pid);
+        snap.process_count = snap.processes.len();
     }
 
     fn collect_host(&self) -> HostInfo {
@@ -335,17 +341,15 @@ impl Monitor {
         gpus
     }
 
-    fn collect_processes(
-        &self,
-        secs: f64,
-        gpu_mem_by_pid: &HashMap<u32, u64>,
-    ) -> Vec<ProcessMetrics> {
+    fn collect_processes(&self, gpu_mem_by_pid: &HashMap<u32, u64>) -> Vec<ProcessMetrics> {
+        // We only refresh cpu/memory/user for processes, so `command`, `exe`
+        // and per-process disk I/O are intentionally left empty here to keep the
+        // (already infrequent) process scan cheap.
         self.system
             .processes()
             .values()
             .map(|p| {
                 let pid = p.pid().as_u32();
-                let disk = p.disk_usage();
                 let user = p
                     .user_id()
                     .and_then(|uid| self.users.get_user_by_id(uid))
@@ -354,12 +358,8 @@ impl Monitor {
                     pid,
                     parent_pid: p.parent().map(|pp| pp.as_u32()),
                     name: p.name().to_string_lossy().into_owned(),
-                    command: p
-                        .cmd()
-                        .iter()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .collect(),
-                    exe: p.exe().map(|e| e.to_string_lossy().into_owned()),
+                    command: Vec::new(),
+                    exe: None,
                     user,
                     cpu_usage: p.cpu_usage(),
                     memory: p.memory(),
@@ -367,8 +367,8 @@ impl Monitor {
                     status: p.status().to_string(),
                     run_time: p.run_time(),
                     start_time: p.start_time(),
-                    disk_read_rate: disk.read_bytes as f64 / secs,
-                    disk_write_rate: disk.written_bytes as f64 / secs,
+                    disk_read_rate: 0.0,
+                    disk_write_rate: 0.0,
                     gpu_memory: gpu_mem_by_pid.get(&pid).copied(),
                 }
             })

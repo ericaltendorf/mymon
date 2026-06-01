@@ -66,19 +66,21 @@ fn bold(text: impl Into<String>, color: Color) -> Span<'static> {
 }
 
 fn render_overview(f: &mut Frame, area: Rect, app: &App) {
-    let Some(snap) = &app.snapshot else {
+    if !app.ready {
         let _ = bordered(f, area, Line::from(bold(" mymon ", FRAME_COLOR)), FRAME_COLOR);
         return;
-    };
+    }
+    let snap = &app.snapshot;
     let cpu = &snap.cpu;
     let mem = &snap.memory;
     let has_gpu = !snap.gpus.is_empty();
 
-    // Title now carries host + uptime; per-metric numbers live in the gutter.
+    // Title carries host + (condensed) CPU model + uptime; per-metric numbers
+    // live in the gutter.
     let title = format!(
         " {} · {} · up {} ",
         snap.host.hostname.as_deref().unwrap_or("mymon"),
-        cpu.brand.trim(),
+        format::cpu_model(&cpu.brand),
         format::duration(snap.host.uptime),
     );
     let inner = bordered(f, area, Line::from(bold(title, FRAME_COLOR)), FRAME_COLOR);
@@ -93,7 +95,7 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
         .collect();
     gpu_bars.sort_by(desc);
 
-    // --- Right-side width budget: CPU bars + blank + [GPU bars + blank] + mem. ---
+    // --- Bar-panel width budget: CPU bars + blank + [GPU bars + blank] + mem. ---
     let cpu_chars = (cpu_bars.len() as u16).div_ceil(2); // 1 dot-column per core
     let gpu_chars = gpu_bars.len() as u16; // 1 char (2 dots) per device
     let mem_chars = 1u16; // one "double-braille" column
@@ -102,28 +104,17 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
         + 1
         + mem_chars;
 
-    // --- Inner layout: gutter | graph | gap | bars. ---
+    // --- Inner layout: gutter | bars | gap | graph (graph on the right). ---
     let max_bars = inner.width.saturating_sub(GUTTER_W + 6);
-    let [gutter, graph, _gap, bars] = Layout::horizontal([
+    let [gutter, bars, _gap, graph] = Layout::horizontal([
         Constraint::Length(GUTTER_W),
-        Constraint::Fill(1),
-        Constraint::Length(1),
         Constraint::Length(bars_w.min(max_bars)),
+        Constraint::Length(1),
+        Constraint::Fill(1),
     ])
     .areas(inner);
 
     render_gutter(f, gutter, snap);
-
-    // --- Graph: three lines sharing one axis. ---
-    let cpu_hist = app.cpu_history.to_vec();
-    let gpu_hist = app.gpu_history.to_vec();
-    let mem_hist = app.mem_history.to_vec();
-    let mut series: Vec<(&[f64], Color)> = vec![(&cpu_hist, CPU_COLOR)];
-    if has_gpu {
-        series.push((&gpu_hist, GPU_COLOR));
-    }
-    series.push((&mem_hist, MEM_COLOR));
-    history_multi(graph, f.buffer_mut(), &series, 100.0);
 
     // --- Bars: CPU cores | blank | [GPU | blank] | stacked memory. ---
     let mut cons = vec![Constraint::Length(cpu_chars), Constraint::Length(1)];
@@ -150,6 +141,18 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
         (mem.swap_used as f64 / total, SWAP_COLOR),
     ];
     stacked_bar(mem_seg, f.buffer_mut(), &mem_segments, 2);
+
+    // --- Graph: three lines sharing one axis. Draw memory first and CPU last
+    // so the line you watch most (CPU) is never hidden by the flatter ones. ---
+    let cpu_hist = app.cpu_history.to_vec();
+    let gpu_hist = app.gpu_history.to_vec();
+    let mem_hist = app.mem_history.to_vec();
+    let mut series: Vec<(&[f64], Color)> = vec![(&mem_hist, MEM_COLOR)];
+    if has_gpu {
+        series.push((&gpu_hist, GPU_COLOR));
+    }
+    series.push((&cpu_hist, CPU_COLOR));
+    history_multi(graph, f.buffer_mut(), &series, 100.0);
 }
 
 /// The left gutter: one color-coded readout per row, doubling as the legend
@@ -182,14 +185,13 @@ fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
 }
 
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
-    let count = app.snapshot.as_ref().map_or(0, |s| s.processes.len());
-    let title = format!(" PROCESSES  {count} ");
+    let title = format!(" PROCESSES  {} ", app.snapshot.process_count);
     let inner = bordered(f, area, Line::from(bold(title, PROC_COLOR)), PROC_COLOR);
 
-    let Some(snap) = &app.snapshot else { return };
-    if inner.height == 0 {
+    if !app.ready || inner.height == 0 {
         return;
     }
+    let snap = &app.snapshot;
 
     let show_gpu = !snap.gpus.is_empty();
 

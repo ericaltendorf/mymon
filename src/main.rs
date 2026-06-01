@@ -13,29 +13,35 @@ use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers
 
 use app::App;
 
+/// Read a millisecond duration from an env var, falling back to `default`.
+fn interval_from_env(var: &str, default: Duration) -> Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(default)
+        .max(monitor::MIN_REFRESH_INTERVAL)
+}
+
 fn main() -> Result<()> {
-    // Default sample cadence; never faster than what sysinfo needs for accurate
-    // CPU figures.
-    let tick_rate = Duration::from_secs(1).max(monitor::MIN_REFRESH_INTERVAL);
+    // Cheap stats drive the graphs; the expensive process scan runs less often.
+    // Both are overridable for big machines where the /proc scan is pricey.
+    let stats_interval = interval_from_env("MYMON_INTERVAL_MS", Duration::from_secs(1));
+    let process_interval = interval_from_env("MYMON_PROC_INTERVAL_MS", Duration::from_secs(2));
 
     let mut terminal = ratatui::init();
-    let result = run(&mut terminal, App::new(tick_rate));
+    let result = run(&mut terminal, App::new(stats_interval, process_interval));
     ratatui::restore();
     result
 }
 
 fn run(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
-    // Prime the first sample so the graphs start populating immediately.
     while !app.should_quit {
         terminal.draw(|f| ui::render(f, &app))?;
 
-        // Wait for input until the next tick is due.
-        let timeout = app
-            .tick_rate
-            .checked_sub(app.last_tick.elapsed())
-            .unwrap_or_default();
-
-        if event::poll(timeout)? {
+        // Block until the next tick is due (or an input event arrives), so the
+        // process is asleep the rest of the time.
+        if event::poll(app.time_until_next_tick())? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     handle_key(&mut app, key.code, key.modifiers);
@@ -43,9 +49,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
             }
         }
 
-        if app.last_tick.elapsed() >= app.tick_rate {
-            app.on_tick();
-        }
+        app.update();
     }
     Ok(())
 }
@@ -69,10 +73,9 @@ mod tests {
     /// in-memory backend, and confirm braille glyphs were emitted.
     #[test]
     fn renders_braille_into_buffer() {
-        let mut app = App::new(Duration::from_millis(50));
-        app.on_tick();
+        let mut app = App::new(Duration::from_millis(50), Duration::from_millis(50));
         sleep(monitor::MIN_REFRESH_INTERVAL);
-        app.on_tick();
+        app.on_stats_tick();
 
         let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
         terminal.draw(|f| ui::render(f, &app)).unwrap();
@@ -90,5 +93,21 @@ mod tests {
             .count();
 
         assert!(braille > 0, "expected braille glyphs to be rendered");
+    }
+
+    #[test]
+    fn cpu_model_examples() {
+        assert_eq!(
+            format::cpu_model("13th Gen Intel(R) Core(TM) i7-1370P"),
+            "i7-1370P"
+        );
+        assert_eq!(
+            format::cpu_model("AMD Ryzen 9 5950X 16-Core Processor"),
+            "Ryzen 9 5950X"
+        );
+        assert_eq!(
+            format::cpu_model("Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"),
+            "Xeon Gold 6248"
+        );
     }
 }

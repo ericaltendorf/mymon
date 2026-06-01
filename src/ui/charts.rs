@@ -84,6 +84,23 @@ pub fn history_multi(area: Rect, buf: &mut Buffer, series: &[(&[f64], Color)], m
     canvas.render_to(area, buf);
 }
 
+/// Bar height in dots for a fill fraction, with a persistent baseline: a value
+/// of 0 still lights the bottom dot row (level 1), and any non-zero value
+/// reaches at least level 2. This keeps every bar visible so idle cores/GPUs
+/// don't vanish.
+fn bar_height(frac: f64, dot_h: u32) -> u32 {
+    if dot_h == 0 {
+        return 0;
+    }
+    let frac = frac.clamp(0.0, 1.0);
+    if frac <= 0.0 {
+        1
+    } else {
+        let h = 2.0 + frac * dot_h.saturating_sub(2) as f64;
+        (h.round() as u32).clamp(2, dot_h)
+    }
+}
+
 /// Draw vertical bars for `values` (each in `0.0..=1.0`) into `area`.
 ///
 /// Each value occupies `bar_dots` dot-columns (use `1` for the "half a
@@ -104,7 +121,7 @@ pub fn bar_chart(area: Rect, buf: &mut Buffer, values: &[f64], bar_dots: u32, ga
             break;
         }
         let frac = v.clamp(0.0, 1.0);
-        let height = (frac * dot_h as f64).round() as u32;
+        let height = bar_height(frac, dot_h);
         let color = load_color(frac);
         for dx in 0..bar_dots {
             if x + dx >= dot_w {
@@ -145,6 +162,14 @@ pub fn stacked_bar(area: Rect, buf: &mut Buffer, segments: &[(f64, Color)], bar_
             }
         }
         filled = top;
+    }
+
+    // Persistent baseline: keep the bar visible even when everything is ~0.
+    if filled == 0 {
+        let color = segments.first().map(|(_, c)| *c).unwrap_or(Color::Gray);
+        for dx in 0..cols {
+            canvas.set(dx, dot_h - 1, color);
+        }
     }
 
     canvas.render_to(area, buf);
