@@ -52,6 +52,25 @@ pub fn gpu_summary(gpus: &[GpuMetrics]) -> String {
         .join(" + ")
 }
 
+/// Compact byte count rendered as `(number, unit)` for callers that want to
+/// style the unit suffix separately (e.g. dim gray "M" next to a normal-color
+/// "8.2"). Uses 2-3 significant digits: `8.2M`, `73.1M`, `213M`, `18.2G`.
+pub fn bytes_short(n: u64) -> (String, &'static str) {
+    const UNITS: [&str; 6] = ["B", "K", "M", "G", "T", "P"];
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 1024.0 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
+    }
+    let num = if v >= 100.0 {
+        format!("{v:.0}")
+    } else {
+        format!("{v:.1}")
+    };
+    (num, UNITS[unit])
+}
+
 /// Format a byte count using binary (IEC) units: B, KiB, MiB, ...
 pub fn bytes(n: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];

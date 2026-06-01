@@ -108,13 +108,15 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     let mem_frac = mem.used as f64 / mem.total.max(1) as f64;
 
     // --- Bar-panel width budget. ---
-    // CPU cores at 1 dot per core; system memory at 2 dots (1 char); GPU util
-    // at 2 dots per device; GPU memory at 1 dot per device (so 4 GPUs = 2
-    // text cells).
+    // CPU cores at 1 dot per core; system memory at 2 dots (1 char). GPU util
+    // and GPU memory are 1 dot per device when there are multiple GPUs (so 4
+    // GPUs collapse into 2 text cells per group), but bump to 2 dots when
+    // there's only one GPU so a single device still reads cleanly.
     let cpu_chars = (cpu_bars.len() as u16).div_ceil(2);
     let mem_chars = 1u16;
-    let gpu_chars = gpu_bars.len() as u16;
-    let gpu_mem_chars = (gpu_mem_bars.len() as u16).div_ceil(2);
+    let gpu_bar_dots: u32 = if gpu_bars.len() <= 1 { 2 } else { 1 };
+    let gpu_chars = ((gpu_bars.len() as u32 * gpu_bar_dots).div_ceil(2)) as u16;
+    let gpu_mem_chars = ((gpu_mem_bars.len() as u32 * gpu_bar_dots).div_ceil(2)) as u16;
     let bars_w = cpu_chars
         + 1
         + mem_chars
@@ -153,8 +155,15 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     bar_chart(segs[0], f.buffer_mut(), &cpu_bars, 1, 0, CPU_COLOR);
     bar_chart(segs[2], f.buffer_mut(), &[mem_frac], 2, 0, MEM_COLOR);
     if has_gpu {
-        bar_chart(segs[4], f.buffer_mut(), &gpu_bars, 2, 0, GPU_COLOR);
-        bar_chart(segs[6], f.buffer_mut(), &gpu_mem_bars, 1, 0, VRAM_COLOR);
+        bar_chart(segs[4], f.buffer_mut(), &gpu_bars, gpu_bar_dots, 0, GPU_COLOR);
+        bar_chart(
+            segs[6],
+            f.buffer_mut(),
+            &gpu_mem_bars,
+            gpu_bar_dots,
+            0,
+            VRAM_COLOR,
+        );
     }
 
     // --- Graph: lines sharing one axis. Draw the flatter/quieter ones first so
@@ -252,7 +261,7 @@ enum ProcSort {
 
 /// Below this width we collapse to a single CPU-sorted pane; at or above we
 /// split into side-by-side CPU- and MEM-sorted panes.
-const PROC_DUAL_MIN_WIDTH: u16 = 130;
+const PROC_DUAL_MIN_WIDTH: u16 = 110;
 
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
     if area.width >= PROC_DUAL_MIN_WIDTH {
@@ -269,24 +278,18 @@ fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
     let snap = &app.snapshot;
     let show_gpu = !snap.gpus.is_empty();
 
-    // Column headers ride the top frame as a left-aligned title; the sort key
-    // sits on the right so each pane reads as "by CPU" or "by MEM".
+    // Column headers ride the top frame as the block title; the sort dimension
+    // is implicit from the column with the descending values.
     let header_title = Line::from(Span::styled(
         process_header_text(show_gpu),
         Style::new()
             .fg(PROC_COLOR)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED),
     ));
-    let sort_label = match sort {
-        ProcSort::Cpu => " by CPU ",
-        ProcSort::Mem => " by MEM ",
-    };
-    let sort_title = Line::from(bold(sort_label, PROC_COLOR)).right_aligned();
 
     let block = Block::bordered()
         .border_style(Style::new().fg(PROC_COLOR))
-        .title(header_title)
-        .title(sort_title);
+        .title(header_title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -314,50 +317,73 @@ fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Width of one memory cell — 4 chars for the number, 1 for the unit suffix.
+const MEM_CELL_W: usize = 5;
+
 /// Column-header text, matching the column widths used by [`process_row`] so
 /// it aligns with the data when rendered on the top frame as a title.
 fn process_header_text(show_gpu: bool) -> String {
     let gpu = if show_gpu {
-        format!(" {:>9}", "GPU MEM")
+        format!(" {:>w$}", "VRAM", w = MEM_CELL_W)
     } else {
         String::new()
     };
     format!(
-        "{:>7} {:<8} {:>5} {:>9}{} {}",
-        "PID", "USER", "CPU%", "MEM", gpu, "COMMAND"
+        "{:>7} {:<8} {:>5} {:>w$}{} {}",
+        "PID",
+        "USER",
+        "CPU%",
+        "MEM",
+        gpu,
+        "COMMAND",
+        w = MEM_CELL_W
     )
 }
 
 /// One process row. The CPU% cell is colored by load (a process at >=100% — a
-/// full core — reads as hot). The command is truncated to the remaining width.
+/// full core — reads as hot). Memory cells split the number and the unit
+/// suffix into separate spans so the suffix can be dimmed. The command is
+/// truncated to the remaining width.
 fn process_row(p: &ProcessMetrics, show_gpu: bool, width: u16) -> Line<'static> {
     let user = truncate(p.user.as_deref().unwrap_or("?"), 8);
     let prefix = format!("{:>7} {:<8} ", p.pid, user);
     let cpu_s = format!("{:>5.1}", p.cpu_usage);
-    let mem_s = format!(" {:>9}", format::bytes(p.memory));
-    let gpu_s = if show_gpu {
-        let g = p
-            .gpu_memory
-            .map(format::bytes)
-            .unwrap_or_else(|| "-".to_string());
-        format!(" {g:>9}")
+
+    let (mem_num, mem_unit) = format::bytes_short(p.memory);
+    let mem_num_str = format!(" {mem_num:>4}");
+
+    // gpu memory: either "<num><unit>" or "    -" with no unit
+    let (gpu_num_str, gpu_unit) = if show_gpu {
+        if let Some(g) = p.gpu_memory {
+            let (n, u) = format::bytes_short(g);
+            (format!(" {n:>4}"), u)
+        } else {
+            (format!(" {:>w$}", "-", w = MEM_CELL_W), "")
+        }
     } else {
-        String::new()
+        (String::new(), "")
     };
 
     let used = prefix.chars().count()
         + cpu_s.chars().count()
-        + mem_s.chars().count()
-        + gpu_s.chars().count()
+        + mem_num_str.chars().count()
+        + mem_unit.len()
+        + gpu_num_str.chars().count()
+        + gpu_unit.len()
         + 1; // separating space before the command
     let cmd_w = (width as usize).saturating_sub(used);
     let cmd = truncate(&p.name, cmd_w);
 
     let cpu_frac = (p.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
+    let unit_style = Style::new().fg(Color::DarkGray);
     Line::from(vec![
         Span::raw(prefix),
         Span::styled(cpu_s, Style::new().fg(load_color(cpu_frac))),
-        Span::raw(format!("{mem_s}{gpu_s} {cmd}")),
+        Span::raw(mem_num_str),
+        Span::styled(mem_unit, unit_style),
+        Span::raw(gpu_num_str),
+        Span::styled(gpu_unit, unit_style),
+        Span::raw(format!(" {cmd}")),
     ])
 }
 

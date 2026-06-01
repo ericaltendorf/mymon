@@ -8,39 +8,41 @@ memory.
 ## Sample render
 
 ```
-┌ devbox · 5950X · A6000x4 · 423 procs · up 2d 14:23:11 ───────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│CPU  47% ⡄          ⣀⣀   ⡄                                                                               ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡀                                │
-│MEM  59% ⣿⣦⡀      ⣤ ⣿⣿⣿  ⣿  ⣤⣤⣤⣤⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣤⣤⣤⣤⣤⣤⣤⣤⣤⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣴⣒⣒⣒⣒⣒⣒⣒⣒⣒⣒⣋⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣀⣀⣀                ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⣉⣉⣉⣉⣉⣓⣒⣒⣒⣒⣒⣒⣒⣒⣒⣦⣤⣤⣤⣤⣤⣤⣤│
-│GPU  65% ⣿⣿⣿⣦⣀⡀   ⣿ ⣿⣿⣿⣤ ⣿⣆ ⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠚⠉⠉⠉⠉⠉⠉⠉⠙⠛⠛⠯⠭⠭⣍⣉⣀⣀⡀            ⢀⣀⣀⣀⣀⡤⠤⠤⠴⠒⠒⠒⠋⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠙⠛⠛⠛⠻⠭⠭⠭⠭⣍⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⡭⠭⠭⠭⠽⠛⠛⠛⠋⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉│
-│VRM  54% ⣿⣿⣿⣿⣿⣿⣷⣶ ⣿ ⣿⣿⣿⣿ ⣿⣿                                     ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉                                                                                │
-└─────────────────────────────────────▴─────────────────────────────▴─────────────────────────────▴─────────────────────────────▴──────────────────────────────┘
-┌    PID USER      CPU%       MEM   GPU MEM COMMAND──────────────────── by CPU ┐┌    PID USER      CPU%       MEM   GPU MEM COMMAND──────────────────── by MEM ┐
-│   1000 alice    312.4  18.2 GiB         - train.py                           ││   1000 alice    312.4  18.2 GiB         - train.py                           │
-│   1137 alice    198.7   4.6 GiB         - rustc                              ││   1137 alice    198.7   4.6 GiB         - rustc                              │
-│   1274 alice     96.3   1.1 GiB         - cargo                              ││   1548 alice     22.1   3.8 GiB         - firefox                            │
-│   1411 bob       47.8   2.4 GiB         - clangd                             ││   1411 bob       47.8   2.4 GiB         - clangd                             │
-│   1548 alice     22.1   3.8 GiB         - firefox                            ││   1274 alice     96.3   1.1 GiB         - cargo                              │
-│   1685 alice      0.4  12.3 MiB         - zsh                                ││   2096 root       0.1  20.5 MiB         - systemd                            │
-│   1822 bob        0.3  15.4 MiB         - vim                                ││   1822 bob        0.3  15.4 MiB         - vim                                │
-│   1959 alice      0.1   8.2 MiB         - tmux                               ││   1685 alice      0.4  12.3 MiB         - zsh                                │
-│   2096 root       0.1  20.5 MiB         - systemd                            ││   2233 root       0.0   9.2 MiB         - dbus-daemon                        │
-│   2233 root       0.0   9.2 MiB         - dbus-daemon                        ││   1959 alice      0.1   8.2 MiB         - tmux                               │
-└──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
+┌ devbox · 5950X · A6000x4 · 423 procs · up 2d 14:23:11 ───────────────────────────────────────────────────────────────┐
+│CPU  47% ⡄          ⣀  ⡄                                         ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⡀                                │
+│MEM  59% ⣿⣦⡀      ⣤ ⣿⡇ ⣿  ⣀⣀⣀⣀⣀⣠⣤⣤⣤⣤⣤⣤⣤⣤⣴⣒⣒⣒⣒⣒⣒⣒⣒⣒⣒⣋⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣀⣀⣀                ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⣉⣉⣉⣉⣉⣓⣒⣒⣒⣒⣒⣒⣒⣒⣒⣦⣤⣤⣤⣤⣤⣤⣤│
+│GPU  65% ⣿⣿⣿⣦⣀⡀   ⣿ ⣿⣧ ⣿⣆            ⢀⣀⣀⣀⣀⡤⠤⠤⠴⠒⠒⠒⠋⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠙⠛⠛⠛⠻⠭⠭⠭⠭⣍⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⣉⡭⠭⠭⠭⠽⠛⠛⠛⠋⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉│
+│VRM  54% ⣿⣿⣿⣿⣿⣿⣷⣶ ⣿ ⣿⣿ ⣿⣿ ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉                                                                                │
+└───────────────────────────▴─────────────────────────────▴─────────────────────────────▴──────────────────────────────┘
+┌    PID USER      CPU%   MEM  VRAM COMMAND────────────────┐┌    PID USER      CPU%   MEM  VRAM COMMAND────────────────┐
+│   1000 alice    312.4 18.2G     - train.py               ││   1000 alice    312.4 18.2G     - train.py               │
+│   1137 alice    198.7  4.6G     - rustc                  ││   1137 alice    198.7  4.6G     - rustc                  │
+│   1274 alice     96.3  1.1G     - cargo                  ││   1548 alice     22.1  3.8G     - firefox                │
+│   1411 bob       47.8  2.4G     - clangd                 ││   1411 bob       47.8  2.4G     - clangd                 │
+│   1548 alice     22.1  3.8G     - firefox                ││   1274 alice     96.3  1.1G     - cargo                  │
+│   1685 alice      0.4 12.3M     - zsh                    ││   2096 root       0.1 20.5M     - systemd                │
+│   1822 bob        0.3 15.4M     - vim                    ││   1822 bob        0.3 15.4M     - vim                    │
+│   1959 alice      0.1  8.2M     - tmux                   ││   1685 alice      0.4 12.3M     - zsh                    │
+│   2096 root       0.1 20.5M     - systemd                ││   2233 root       0.0  9.2M     - dbus-daemon            │
+│   2233 root       0.0  9.2M     - dbus-daemon            ││   1959 alice      0.1  8.2M     - tmux                   │
+└──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
 ```
 
 In a real terminal the gutter readouts, bar columns and history lines
 each carry their own color (CPU cyan, MEM blue, GPU magenta, GPU memory
 light magenta); bar cells that climb into the upper bands flash yellow
-above 50%, orange above 75%, and red above 90%. White ▴ marks on the
-bottom frame of the overview are one-minute time ticks counted back from
-"now" at the right edge of the graph.
+above 50%, orange above 75%, and red above 90%. The `M`/`G` suffixes in
+the memory columns are dimmed so the numbers read first. White ▴ marks
+on the bottom frame of the overview are one-minute time ticks counted
+back from "now" at the right edge of the graph. The left process pane
+is sorted by CPU, the right by resident memory.
 
 The CPU and GPU model numbers in the title are extracted by digit
 density (so `13th Gen Intel(R) Core(TM) i7-1370P` collapses to
 `i7-1370P` and `NVIDIA RTX A6000` collapses to `A6000`). Repeated GPUs
 are folded into `A6000x4`.
 
-When the process area is narrower than 130 columns the dual pane
+When the process area is narrower than 110 columns the dual pane
 collapses to a single CPU-sorted pane.
 
 ## Build and run

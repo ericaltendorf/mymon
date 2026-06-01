@@ -183,7 +183,7 @@ mod tests {
             app.gpu_mem_history.push(48.0 + 4.0 * (t * 0.2).sin());
         }
 
-        let mut terminal = Terminal::new(TestBackend::new(160, 22)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(120, 22)).unwrap();
         terminal.draw(|f| ui::render(f, &app)).unwrap();
 
         let buf = terminal.backend().buffer();
