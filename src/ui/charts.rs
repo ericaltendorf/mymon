@@ -27,18 +27,24 @@ pub fn load_color(frac: f64) -> Color {
     Color::Rgb(r as u8, g as u8, 40)
 }
 
-/// Color a single dot of a bar by the bar fraction its position represents:
-/// the indicator `base` color in the bottom half, escalating to yellow above
-/// 50%, orange above 75%, and red above 90%.
-pub fn threshold_color(pct: f64, base: Color) -> Color {
-    if pct >= 0.9 {
-        Color::Red
-    } else if pct >= 0.75 {
-        ORANGE
-    } else if pct >= 0.5 {
-        Color::Yellow
-    } else {
+/// Color for a bar dot, banded by the cell row it sits in. The bottom half of
+/// the bar's cell rows always shows the indicator `base` color; cells in the
+/// 50-75% band turn yellow; cells above 75% turn orange, or red once the bar's
+/// value crosses 90%. Each braille cell is 4 dot rows tall, so for the standard
+/// 4-cell-tall overview the bottom two rows are always `base`.
+fn cell_band_color(cell_idx: u32, n_cells: u32, frac: f64, base: Color) -> Color {
+    if n_cells == 0 {
+        return base;
+    }
+    let cell_top_frac = (cell_idx + 1) as f64 / n_cells as f64;
+    if cell_top_frac <= 0.5 + 1e-9 {
         base
+    } else if cell_top_frac <= 0.75 + 1e-9 {
+        Color::Yellow
+    } else if frac >= 0.9 {
+        Color::Red
+    } else {
+        ORANGE
     }
 }
 
@@ -174,6 +180,7 @@ pub fn bar_chart(
     let mut canvas = BrailleCanvas::new(area.width, area.height);
     let dot_w = canvas.dot_width();
     let dot_h = canvas.dot_height();
+    let n_cells = dot_h / 4;
     let stride = (bar_dots + gap_dots).max(1);
 
     let mut x = 0u32;
@@ -183,14 +190,13 @@ pub fn bar_chart(
         }
         let frac = v.clamp(0.0, 1.0);
         let height = bar_height(frac, dot_h);
-        // Light each dot of the bar; coloring by dot position means cells in
-        // the upper bands pick up their threshold color (last writer wins per
-        // cell in the canvas, so each cell ends up the color of its topmost
-        // lit dot).
+        // Color each lit dot by which braille cell row it sits in, so whole
+        // cell rows take on the indicator color or the upper-band color
+        // together rather than smearing across thresholds.
         for h in 0..height {
             let y = dot_h - 1 - h;
-            let dot_pct = (h + 1) as f64 / dot_h as f64;
-            let color = threshold_color(dot_pct, base);
+            let cell_idx = h / 4;
+            let color = cell_band_color(cell_idx, n_cells, frac, base);
             for dx in 0..bar_dots {
                 if x + dx < dot_w {
                     canvas.set(x + dx, y, color);
