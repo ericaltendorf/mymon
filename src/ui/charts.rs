@@ -70,17 +70,6 @@ fn draw_series(
     }
 }
 
-/// Draw a scrolling line graph of `samples` (oldest..newest) into `area`,
-/// colored per-column by value via [`load_color`]. `max` maps to the top.
-pub fn history_line(area: Rect, buf: &mut Buffer, samples: &[f64], max: f64) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let mut canvas = BrailleCanvas::new(area.width, area.height);
-    draw_series(&mut canvas, samples, max, |v| load_color(v / max));
-    canvas.render_to(area, buf);
-}
-
 /// Draw several line series sharing one set of axes into `area`. Each series is
 /// drawn in a single fixed color; later series win color on overlapping cells.
 pub fn history_multi(area: Rect, buf: &mut Buffer, series: &[(&[f64], Color)], max: f64) {
@@ -124,6 +113,38 @@ pub fn bar_chart(area: Rect, buf: &mut Buffer, values: &[f64], bar_dots: u32, ga
             canvas.set_bar(x + dx, height, color);
         }
         x += stride;
+    }
+
+    canvas.render_to(area, buf);
+}
+
+/// Draw a single vertical bar made of stacked `segments`, each
+/// `(fraction_of_full_height, color)`, stacked from the bottom up. The bar is
+/// `bar_dots` dot-columns wide and left-aligned in `area`. Cumulative height is
+/// clamped to the top, so overflowing segments are simply cut off.
+pub fn stacked_bar(area: Rect, buf: &mut Buffer, segments: &[(f64, Color)], bar_dots: u32) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut canvas = BrailleCanvas::new(area.width, area.height);
+    let dot_w = canvas.dot_width();
+    let dot_h = canvas.dot_height();
+    let cols = bar_dots.min(dot_w);
+
+    let mut filled = 0u32; // dots already filled, measured from the bottom
+    for (frac, color) in segments {
+        if filled >= dot_h {
+            break;
+        }
+        let h = (frac.clamp(0.0, 1.0) * dot_h as f64).round() as u32;
+        let top = (filled + h).min(dot_h);
+        for b in filled..top {
+            let y = dot_h - 1 - b;
+            for dx in 0..cols {
+                canvas.set(dx, y, *color);
+            }
+        }
+        filled = top;
     }
 
     canvas.render_to(area, buf);

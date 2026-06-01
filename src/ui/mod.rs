@@ -1,10 +1,12 @@
 //! Top-level TUI layout and per-block rendering.
 //!
 //! Layout (top to bottom):
-//! - **CPU/GPU** block: a shared history graph (avg CPU and avg GPU as two
-//!   colored lines) on the left, and on the right a bar chart of per-core CPU
-//!   utilization, a blank column, then one bar per GPU.
-//! - **Memory** block: a single full-width history graph.
+//! - **Overview** block (compact): a left stats gutter that doubles as the
+//!   graph legend, a shared history graph plotting avg CPU / avg GPU / memory
+//!   as three colored lines, and on the right a bar group — per-core CPU bars,
+//!   a blank column, one bar per GPU, a blank column, then a stacked
+//!   (RAM + swap) memory bar.
+//! - **Processes** block: fills the remaining space.
 
 mod braille;
 mod charts;
@@ -17,28 +19,32 @@ use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::{App, mean_gpu_util};
 use crate::format;
-use crate::metrics::ProcessMetrics;
+use crate::metrics::{ProcessMetrics, Snapshot};
 
-use charts::{bar_chart, history_line, history_multi, load_color};
+use charts::{bar_chart, history_multi, load_color, stacked_bar};
 
 const CPU_COLOR: Color = Color::Cyan;
 const GPU_COLOR: Color = Color::Magenta;
 const MEM_COLOR: Color = Color::Blue;
+const SWAP_COLOR: Color = Color::Red;
 const PROC_COLOR: Color = Color::Gray;
+const FRAME_COLOR: Color = Color::Gray;
+
+/// Graph content rows for the compact overview block, excluding the border.
+const STAT_INNER_ROWS: u16 = 4;
+/// Total block height: inner content rows plus the top/bottom frame rows.
+const STAT_BLOCK_ROWS: u16 = STAT_INNER_ROWS + 2;
+/// Width of the left stats/legend gutter (fits e.g. "CPU 100%").
+const GUTTER_W: u16 = 9;
 
 /// Render the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &App) {
-    // The two stat blocks stay compact (up to 4 rows each); everything left
-    // over flows into the process list at the bottom.
-    let [top_area, mem_area, proc_area] = Layout::vertical([
-        Constraint::Max(4),
-        Constraint::Max(4),
-        Constraint::Fill(1),
-    ])
-    .areas(f.area());
+    // The overview block stays compact (up to 4 content rows); everything left
+    // over flows into the process list below.
+    let [top_area, proc_area] =
+        Layout::vertical([Constraint::Max(STAT_BLOCK_ROWS), Constraint::Fill(1)]).areas(f.area());
 
-    render_cpu_gpu(f, top_area, app);
-    render_memory(f, mem_area, app);
+    render_overview(f, top_area, app);
     render_processes(f, proc_area, app);
 }
 
@@ -59,103 +65,120 @@ fn bold(text: impl Into<String>, color: Color) -> Span<'static> {
     )
 }
 
-fn render_cpu_gpu(f: &mut Frame, area: Rect, app: &App) {
+fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     let Some(snap) = &app.snapshot else {
-        let _ = bordered(f, area, Line::from(bold(" CPU / GPU ", CPU_COLOR)), CPU_COLOR);
+        let _ = bordered(f, area, Line::from(bold(" mymon ", FRAME_COLOR)), FRAME_COLOR);
         return;
     };
     let cpu = &snap.cpu;
+    let mem = &snap.memory;
     let has_gpu = !snap.gpus.is_empty();
 
-    // --- Title: CPU summary (cyan), then GPU summary (magenta) if present. ---
-    let mut spans = vec![bold(
-        format!(
-            " CPU {:.0}%  {}c/{}p  load {:.2} {:.2} {:.2} ",
-            cpu.global_usage,
-            cpu.logical_cores(),
-            cpu.physical_cores.unwrap_or(0),
-            cpu.load_average.one,
-            cpu.load_average.five,
-            cpu.load_average.fifteen,
-        ),
-        CPU_COLOR,
-    )];
-    if has_gpu {
-        spans.push(Span::raw("│"));
-        spans.push(bold(
-            format!(" GPU {:.0}%  {} ", mean_gpu_util(snap), snap.gpus[0].name),
-            GPU_COLOR,
-        ));
-    }
-    let inner = bordered(f, area, Line::from(spans), CPU_COLOR);
+    // Title now carries host + uptime; per-metric numbers live in the gutter.
+    let title = format!(
+        " {} · {} · up {} ",
+        snap.host.hostname.as_deref().unwrap_or("mymon"),
+        cpu.brand.trim(),
+        format::duration(snap.host.uptime),
+    );
+    let inner = bordered(f, area, Line::from(bold(title, FRAME_COLOR)), FRAME_COLOR);
 
     // --- Bar values, each sorted high -> low for a descending staircase. ---
     let mut cpu_bars: Vec<f64> = cpu.per_core.iter().map(|c| c.usage as f64 / 100.0).collect();
-    cpu_bars.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-
+    cpu_bars.sort_by(desc);
     let mut gpu_bars: Vec<f64> = snap
         .gpus
         .iter()
         .map(|g| g.utilization_gpu.unwrap_or(0) as f64 / 100.0)
         .collect();
-    gpu_bars.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    gpu_bars.sort_by(desc);
 
-    // --- Width budget for the right (bars) side. ---
-    // CPU: one dot-column per core => ceil(n/2) cells.
-    let cpu_chars = (cpu_bars.len() as u16).div_ceil(2);
-    // GPU: each device is a full character (2 dot-columns) wide.
-    let gpu_chars = gpu_bars.len() as u16;
-    // +1 blank column separating the two groups when both are present.
-    let bars_w = if has_gpu && gpu_chars > 0 {
-        cpu_chars + 1 + gpu_chars
-    } else {
-        cpu_chars
-    };
+    // --- Right-side width budget: CPU bars + blank + [GPU bars + blank] + mem. ---
+    let cpu_chars = (cpu_bars.len() as u16).div_ceil(2); // 1 dot-column per core
+    let gpu_chars = gpu_bars.len() as u16; // 1 char (2 dots) per device
+    let mem_chars = 1u16; // one "double-braille" column
+    let bars_w = cpu_chars
+        + if has_gpu { 1 + gpu_chars } else { 0 }
+        + 1
+        + mem_chars;
 
-    let (graph_area, bars_area) = split_left_right(inner, bars_w);
+    // --- Inner layout: gutter | graph | gap | bars. ---
+    let max_bars = inner.width.saturating_sub(GUTTER_W + 6);
+    let [gutter, graph, _gap, bars] = Layout::horizontal([
+        Constraint::Length(GUTTER_W),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+        Constraint::Length(bars_w.min(max_bars)),
+    ])
+    .areas(inner);
 
-    // --- Left: shared history plot (CPU cyan, GPU magenta). ---
+    render_gutter(f, gutter, snap);
+
+    // --- Graph: three lines sharing one axis. ---
     let cpu_hist = app.cpu_history.to_vec();
     let gpu_hist = app.gpu_history.to_vec();
+    let mem_hist = app.mem_history.to_vec();
     let mut series: Vec<(&[f64], Color)> = vec![(&cpu_hist, CPU_COLOR)];
     if has_gpu {
         series.push((&gpu_hist, GPU_COLOR));
     }
-    history_multi(graph_area, f.buffer_mut(), &series, 100.0);
+    series.push((&mem_hist, MEM_COLOR));
+    history_multi(graph, f.buffer_mut(), &series, 100.0);
 
-    // --- Right: CPU bars, blank column, then GPU bars. ---
-    if has_gpu && gpu_chars > 0 {
-        let [cpu_area, _blank, gpu_area] = Layout::horizontal([
-            Constraint::Length(cpu_chars),
-            Constraint::Length(1),
-            Constraint::Length(gpu_chars),
-        ])
-        .areas(bars_area);
-        bar_chart(cpu_area, f.buffer_mut(), &cpu_bars, 1, 0);
-        bar_chart(gpu_area, f.buffer_mut(), &gpu_bars, 2, 0);
-    } else {
-        bar_chart(bars_area, f.buffer_mut(), &cpu_bars, 1, 0);
+    // --- Bars: CPU cores | blank | [GPU | blank] | stacked memory. ---
+    let mut cons = vec![Constraint::Length(cpu_chars), Constraint::Length(1)];
+    if has_gpu {
+        cons.push(Constraint::Length(gpu_chars));
+        cons.push(Constraint::Length(1));
     }
+    cons.push(Constraint::Length(mem_chars));
+    let segs = Layout::horizontal(cons).split(bars);
+
+    bar_chart(segs[0], f.buffer_mut(), &cpu_bars, 1, 0);
+    let mem_seg = if has_gpu {
+        bar_chart(segs[2], f.buffer_mut(), &gpu_bars, 2, 0);
+        segs[4]
+    } else {
+        segs[2]
+    };
+
+    // Memory bar: RAM used (blue) with swap used stacked on top (red), both
+    // scaled against total RAM so swap pressure visibly piles above the RAM.
+    let total = mem.total.max(1) as f64;
+    let mem_segments = [
+        (mem.used as f64 / total, MEM_COLOR),
+        (mem.swap_used as f64 / total, SWAP_COLOR),
+    ];
+    stacked_bar(mem_seg, f.buffer_mut(), &mem_segments, 2);
 }
 
-fn render_memory(f: &mut Frame, area: Rect, app: &App) {
-    let title = match &app.snapshot {
-        Some(snap) => {
-            let m = &snap.memory;
-            format!(
-                " MEM {} / {} ({:.0}%)   SWAP {} / {} ({:.0}%) ",
-                format::bytes(m.used),
-                format::bytes(m.total),
-                m.used_fraction() * 100.0,
-                format::bytes(m.swap_used),
-                format::bytes(m.swap_total),
-                m.swap_used_fraction() * 100.0,
-            )
-        }
-        None => " MEM ".into(),
+/// The left gutter: one color-coded readout per row, doubling as the legend
+/// for the three graph lines (CPU/GPU/MEM) plus a swap row.
+fn render_gutter(f: &mut Frame, area: Rect, snap: &Snapshot) {
+    let has_gpu = !snap.gpus.is_empty();
+    let gpu_line = if has_gpu {
+        Line::from(bold(format!("GPU {:>3.0}%", mean_gpu_util(snap)), GPU_COLOR))
+    } else {
+        Line::from(Span::styled("GPU   --", Style::new().fg(Color::DarkGray)))
     };
-    let inner = bordered(f, area, Line::from(bold(title, MEM_COLOR)), MEM_COLOR);
-    history_line(inner, f.buffer_mut(), &app.mem_history.to_vec(), 100.0);
+    let lines = vec![
+        Line::from(bold(format!("CPU {:>3.0}%", snap.cpu.global_usage), CPU_COLOR)),
+        gpu_line,
+        Line::from(bold(
+            format!("MEM {:>3.0}%", snap.memory.used_fraction() * 100.0),
+            MEM_COLOR,
+        )),
+        Line::from(bold(
+            format!("SWP {:>3.0}%", snap.memory.swap_used_fraction() * 100.0),
+            SWAP_COLOR,
+        )),
+    ];
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// Descending sort comparator for `f64` (NaN treated as equal).
+fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
+    b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
 }
 
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
@@ -251,17 +274,4 @@ fn truncate(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
-}
-
-/// Split `inner` into `(graph, bars)` with a one-column gap, reserving
-/// `bars_w` columns for the bar panel (clamped so the graph keeps room).
-fn split_left_right(inner: Rect, bars_w: u16) -> (Rect, Rect) {
-    let bars = bars_w.min(inner.width.saturating_sub(6));
-    let [graph, _gap, bars] = Layout::horizontal([
-        Constraint::Fill(1),
-        Constraint::Length(1),
-        Constraint::Length(bars),
-    ])
-    .areas(inner);
-    (graph, bars)
 }
