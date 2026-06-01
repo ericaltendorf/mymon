@@ -69,15 +69,20 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     let mem = &snap.memory;
     let has_gpu = !snap.gpus.is_empty();
 
-    // Title: hostname, CPU model (in CPU color), GPU summary (in GPU color),
-    // uptime. The accent colors echo each metric's bar/graph color.
+    // Title: hostname, CPU model (in CPU color), total RAM (in MEM color),
+    // GPU summary (in GPU color), uptime. The accent colors echo each
+    // metric's bar/graph color.
     let host = snap.host.hostname.as_deref().unwrap_or("mymon");
     let cpu_model = format::model_number(&cpu.brand);
     let gpu_summary = format::gpu_summary(&snap.gpus);
     let uptime = format::duration(snap.host.uptime);
+    let (ram_num, ram_unit) = format::bytes_short(mem.total);
+    let ram_str = format!("{ram_num}{ram_unit}");
     let mut title_spans = vec![
         bold(format!(" {host} · "), FRAME_COLOR),
         bold(cpu_model, CPU_COLOR),
+        bold(" · ", FRAME_COLOR),
+        bold(ram_str, MEM_COLOR),
     ];
     if !gpu_summary.is_empty() {
         title_spans.push(bold(" · ", FRAME_COLOR));
