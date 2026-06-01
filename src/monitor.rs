@@ -29,6 +29,9 @@ pub struct Monitor {
     users: Users,
     nvml: Option<Nvml>,
     last_refresh: Instant,
+    /// Hostname/kernel/OS strings + boot time — these don't change at runtime,
+    /// so we read them once and clone into each snapshot.
+    static_host: HostInfo,
 }
 
 impl Monitor {
@@ -55,6 +58,17 @@ impl Monitor {
             }
         };
 
+        let static_host = HostInfo {
+            hostname: System::host_name(),
+            kernel_version: System::kernel_version(),
+            os_version: System::os_version(),
+            long_os_version: System::long_os_version(),
+            distribution_id: System::distribution_id(),
+            cpu_arch: System::cpu_arch(),
+            uptime: Duration::ZERO,
+            boot_time: System::boot_time(),
+        };
+
         Monitor {
             system,
             networks,
@@ -63,6 +77,7 @@ impl Monitor {
             users,
             nvml,
             last_refresh: Instant::now(),
+            static_host,
         }
     }
 
@@ -119,13 +134,18 @@ impl Monitor {
     /// GPU memory to processes, so call [`refresh_stats`](Self::refresh_stats)
     /// first when you want fresh GPU figures.
     pub fn refresh_processes(&mut self, snap: &mut Snapshot) {
+        // `nothing()` leaves `tasks: true`, which makes sysinfo scan every
+        // `/proc/<pid>/task/<tid>` directory and count each thread as its own
+        // process. On thread-heavy machines that explodes the scan cost; we
+        // only care about real processes for the table, so skip tasks.
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing()
                 .with_memory()
                 .with_cpu()
-                .with_user(sysinfo::UpdateKind::OnlyIfNotSet),
+                .with_user(sysinfo::UpdateKind::OnlyIfNotSet)
+                .without_tasks(),
         );
 
         // Map pid -> GPU memory so per-process rows can show GPU usage.
@@ -143,16 +163,9 @@ impl Monitor {
     }
 
     fn collect_host(&self) -> HostInfo {
-        HostInfo {
-            hostname: System::host_name(),
-            kernel_version: System::kernel_version(),
-            os_version: System::os_version(),
-            long_os_version: System::long_os_version(),
-            distribution_id: System::distribution_id(),
-            cpu_arch: System::cpu_arch(),
-            uptime: Duration::from_secs(System::uptime()),
-            boot_time: System::boot_time(),
-        }
+        let mut h = self.static_host.clone();
+        h.uptime = Duration::from_secs(System::uptime());
+        h
     }
 
     fn collect_cpu(&self) -> CpuMetrics {
