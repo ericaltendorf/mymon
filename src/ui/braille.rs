@@ -34,13 +34,22 @@ const BRAILLE_BLANK: u32 = 0x2800;
 /// An off-screen braille drawing surface sized in character cells. Drawing is
 /// done in *dot* coordinates; [`BrailleCanvas::render_to`] blits the result into
 /// a ratatui [`Buffer`] at a target [`Rect`].
+///
+/// Colors are tracked per dot row within each cell (not per cell), so when
+/// `render_to` runs it can pick the color of the topmost lit row. That way
+/// when several series cross through one cell — common in the history graph
+/// where vlines connect distant samples — the cell takes the color of the
+/// line that ended up on top in that column, rather than whichever series
+/// happened to be drawn last.
 pub struct BrailleCanvas {
     cells_w: u16,
     cells_h: u16,
     /// Accumulated braille bits, one byte per character cell, row-major.
     bits: Vec<u8>,
-    /// Foreground color per cell (last writer wins); `None` leaves it unset.
-    colors: Vec<Option<Color>>,
+    /// One color per dot row within each cell — laid out as
+    /// `[cell0_row0, cell0_row1, cell0_row2, cell0_row3, cell1_row0, …]`.
+    /// `None` means no dot in that row of that cell has been lit.
+    row_colors: Vec<Option<Color>>,
 }
 
 impl BrailleCanvas {
@@ -50,7 +59,7 @@ impl BrailleCanvas {
             cells_w,
             cells_h,
             bits: vec![0; n],
-            colors: vec![None; n],
+            row_colors: vec![None; n * 4],
         }
     }
 
@@ -72,8 +81,9 @@ impl BrailleCanvas {
         let cx = (x / 2) as u16;
         let cy = (y / 4) as u16;
         let idx = cy as usize * self.cells_w as usize + cx as usize;
-        self.bits[idx] |= DOT_BITS[(y % 4) as usize][(x % 2) as usize];
-        self.colors[idx] = Some(color);
+        let row = (y % 4) as usize;
+        self.bits[idx] |= DOT_BITS[row][(x % 2) as usize];
+        self.row_colors[idx * 4 + row] = Some(color);
     }
 
     /// Fill an inclusive vertical run of dots in column `x` from `y0` to `y1`.
@@ -85,7 +95,8 @@ impl BrailleCanvas {
     }
 
     /// Blit the accumulated dots into `buf` at `area`. Empty cells are left
-    /// untouched so a caller can draw on top of an existing background.
+    /// untouched so a caller can draw on top of an existing background. Each
+    /// cell takes the color of its topmost lit dot row.
     pub fn render_to(&self, area: Rect, buf: &mut Buffer) {
         let w = self.cells_w.min(area.width);
         let h = self.cells_h.min(area.height);
@@ -97,10 +108,21 @@ impl BrailleCanvas {
                     continue;
                 }
                 let ch = char::from_u32(BRAILLE_BLANK + bits as u32).unwrap_or(' ');
+
+                // Color the cell by its topmost lit row.
+                let mut color = None;
+                for row in 0..4 {
+                    let row_bits = DOT_BITS[row][0] | DOT_BITS[row][1];
+                    if bits & row_bits != 0 {
+                        color = self.row_colors[idx * 4 + row];
+                        break;
+                    }
+                }
+
                 if let Some(cell) = buf.cell_mut((area.x + cx, area.y + cy)) {
                     cell.set_char(ch);
-                    if let Some(color) = self.colors[idx] {
-                        cell.fg = color;
+                    if let Some(c) = color {
+                        cell.fg = c;
                     }
                 }
             }
