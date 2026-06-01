@@ -83,7 +83,10 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
         title_spans.push(bold(" · ", FRAME_COLOR));
         title_spans.push(bold(gpu_summary, GPU_COLOR));
     }
-    title_spans.push(bold(format!(" · up {uptime} "), FRAME_COLOR));
+    title_spans.push(bold(
+        format!(" · {} procs · up {uptime} ", snap.process_count),
+        FRAME_COLOR,
+    ));
 
     let block = Block::bordered()
         .border_style(Style::new().fg(FRAME_COLOR))
@@ -240,27 +243,50 @@ fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
     b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
 }
 
+/// Sort dimension for a process pane.
+#[derive(Clone, Copy)]
+enum ProcSort {
+    Cpu,
+    Mem,
+}
+
+/// Below this width we collapse to a single CPU-sorted pane; at or above we
+/// split into side-by-side CPU- and MEM-sorted panes.
+const PROC_DUAL_MIN_WIDTH: u16 = 130;
+
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
+    if area.width >= PROC_DUAL_MIN_WIDTH {
+        let [left, right] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+        render_process_pane(f, left, app, ProcSort::Cpu);
+        render_process_pane(f, right, app, ProcSort::Mem);
+    } else {
+        render_process_pane(f, area, app, ProcSort::Cpu);
+    }
+}
+
+fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
     let snap = &app.snapshot;
     let show_gpu = !snap.gpus.is_empty();
 
-    // Column headers ride the top frame as a left-aligned title; the process
-    // count sits on the right. Headers use the reversed style of the previous
-    // in-content header row so they read as a header bar.
-    let headers = process_header_text(show_gpu);
+    // Column headers ride the top frame as a left-aligned title; the sort key
+    // sits on the right so each pane reads as "by CPU" or "by MEM".
     let header_title = Line::from(Span::styled(
-        headers,
+        process_header_text(show_gpu),
         Style::new()
             .fg(PROC_COLOR)
             .add_modifier(Modifier::BOLD | Modifier::REVERSED),
     ));
-    let count_title = Line::from(bold(format!(" {} procs ", snap.process_count), PROC_COLOR))
-        .right_aligned();
+    let sort_label = match sort {
+        ProcSort::Cpu => " by CPU ",
+        ProcSort::Mem => " by MEM ",
+    };
+    let sort_title = Line::from(bold(sort_label, PROC_COLOR)).right_aligned();
 
     let block = Block::bordered()
         .border_style(Style::new().fg(PROC_COLOR))
         .title(header_title)
-        .title(count_title);
+        .title(sort_title);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -268,13 +294,15 @@ fn render_processes(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Highest CPU first.
     let mut procs: Vec<&ProcessMetrics> = snap.processes.iter().collect();
-    procs.sort_by(|a, b| {
-        b.cpu_usage
-            .partial_cmp(&a.cpu_usage)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    match sort {
+        ProcSort::Cpu => procs.sort_by(|a, b| {
+            b.cpu_usage
+                .partial_cmp(&a.cpu_usage)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        ProcSort::Mem => procs.sort_by(|a, b| b.memory.cmp(&a.memory)),
+    }
 
     let rows = inner.height as usize;
     let lines: Vec<Line> = procs
