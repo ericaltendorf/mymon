@@ -1,12 +1,13 @@
 //! Top-level TUI layout and per-block rendering.
 //!
 //! Layout (top to bottom):
-//! - **Overview** block (compact): a left stats gutter that doubles as the
-//!   graph legend, a shared history graph plotting avg CPU / avg GPU util /
-//!   avg GPU memory / system memory as colored lines, and on the right a bar
-//!   group — per-core CPU bars, one bar per GPU (utilization), one bar per
-//!   GPU (memory), and a memory bar.
-//! - **Processes** block: fills the remaining space.
+//! - **Overview** block (compact): a left stats gutter (CPU/MEM/GPU/VRAM)
+//!   that doubles as the graph legend, a bar group — per-core CPU bars, then
+//!   the memory bar, then per-GPU utilization and per-GPU memory bars — and
+//!   on the right a shared history graph plotting the four series. White ▴
+//!   tick marks sit on the bottom frame at one-minute intervals.
+//! - **Processes** block: the column headers live on the top frame so all
+//!   inner rows can be filled with process entries.
 
 mod braille;
 mod charts;
@@ -48,16 +49,6 @@ pub fn render(f: &mut Frame, app: &App) {
     render_processes(f, proc_area, app);
 }
 
-/// A bordered block with a composed title; returns the inner drawing area.
-fn bordered(f: &mut Frame, area: Rect, title: Line<'_>, accent: Color) -> Rect {
-    let block = Block::bordered()
-        .border_style(Style::new().fg(accent))
-        .title(title);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    inner
-}
-
 fn bold(text: impl Into<String>, color: Color) -> Span<'static> {
     Span::styled(
         text.into(),
@@ -67,7 +58,10 @@ fn bold(text: impl Into<String>, color: Color) -> Span<'static> {
 
 fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     if !app.ready {
-        let _ = bordered(f, area, Line::from(bold(" mymon ", FRAME_COLOR)), FRAME_COLOR);
+        let placeholder = Block::bordered()
+            .border_style(Style::new().fg(FRAME_COLOR))
+            .title(Line::from(bold(" mymon ", FRAME_COLOR)));
+        f.render_widget(placeholder, area);
         return;
     }
     let snap = &app.snapshot;
@@ -75,18 +69,27 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     let mem = &snap.memory;
     let has_gpu = !snap.gpus.is_empty();
 
-    // Title carries host + (condensed) CPU model + GPU summary + uptime;
-    // per-metric numbers live in the gutter.
+    // Title: hostname, CPU model (in CPU color), GPU summary (in GPU color),
+    // uptime. The accent colors echo each metric's bar/graph color.
     let host = snap.host.hostname.as_deref().unwrap_or("mymon");
     let cpu_model = format::model_number(&cpu.brand);
     let gpu_summary = format::gpu_summary(&snap.gpus);
     let uptime = format::duration(snap.host.uptime);
-    let title = if gpu_summary.is_empty() {
-        format!(" {host} · {cpu_model} · up {uptime} ")
-    } else {
-        format!(" {host} · {cpu_model} · {gpu_summary} · up {uptime} ")
-    };
-    let inner = bordered(f, area, Line::from(bold(title, FRAME_COLOR)), FRAME_COLOR);
+    let mut title_spans = vec![
+        bold(format!(" {host} · "), FRAME_COLOR),
+        bold(cpu_model, CPU_COLOR),
+    ];
+    if !gpu_summary.is_empty() {
+        title_spans.push(bold(" · ", FRAME_COLOR));
+        title_spans.push(bold(gpu_summary, GPU_COLOR));
+    }
+    title_spans.push(bold(format!(" · up {uptime} "), FRAME_COLOR));
+
+    let block = Block::bordered()
+        .border_style(Style::new().fg(FRAME_COLOR))
+        .title(Line::from(title_spans));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
     // --- Bar values, each sorted high -> low for a descending staircase. ---
     let mut cpu_bars: Vec<f64> = cpu.per_core.iter().map(|c| c.usage as f64 / 100.0).collect();
@@ -99,22 +102,24 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     gpu_bars.sort_by(desc);
     let mut gpu_mem_bars: Vec<f64> = snap.gpus.iter().map(|g| g.memory_used_fraction()).collect();
     gpu_mem_bars.sort_by(desc);
+    let mem_frac = mem.used as f64 / mem.total.max(1) as f64;
 
     // --- Bar-panel width budget. ---
-    // CPU cores at 1 dot per core; GPU util at 2 dots per device; GPU memory at
-    // 1 dot per device (so 4 GPUs = 2 text cells); memory at 2 dots.
+    // CPU cores at 1 dot per core; system memory at 2 dots (1 char); GPU util
+    // at 2 dots per device; GPU memory at 1 dot per device (so 4 GPUs = 2
+    // text cells).
     let cpu_chars = (cpu_bars.len() as u16).div_ceil(2);
+    let mem_chars = 1u16;
     let gpu_chars = gpu_bars.len() as u16;
     let gpu_mem_chars = (gpu_mem_bars.len() as u16).div_ceil(2);
-    let mem_chars = 1u16;
     let bars_w = cpu_chars
         + 1
+        + mem_chars
         + if has_gpu {
-            gpu_chars + 1 + gpu_mem_chars + 1
+            1 + gpu_chars + 1 + gpu_mem_chars
         } else {
             0
-        }
-        + mem_chars;
+        };
 
     // --- Inner layout: gutter | bars | gap | graph (graph on the right). ---
     let max_bars = inner.width.saturating_sub(GUTTER_W + 6);
@@ -128,30 +133,26 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
 
     render_gutter(f, gutter, snap);
 
-    // --- Bars: CPU cores | gap | [GPU util | gap | GPU mem | gap] | memory. ---
-    let mut cons = vec![Constraint::Length(cpu_chars), Constraint::Length(1)];
+    // --- Bars: CPU cores | gap | memory | [gap | GPU util | gap | GPU mem]. ---
+    let mut cons = vec![
+        Constraint::Length(cpu_chars),
+        Constraint::Length(1),
+        Constraint::Length(mem_chars),
+    ];
     if has_gpu {
+        cons.push(Constraint::Length(1));
         cons.push(Constraint::Length(gpu_chars));
         cons.push(Constraint::Length(1));
         cons.push(Constraint::Length(gpu_mem_chars));
-        cons.push(Constraint::Length(1));
     }
-    cons.push(Constraint::Length(mem_chars));
     let segs = Layout::horizontal(cons).split(bars);
 
     bar_chart(segs[0], f.buffer_mut(), &cpu_bars, 1, 0, CPU_COLOR);
-    let mem_seg = if has_gpu {
-        bar_chart(segs[2], f.buffer_mut(), &gpu_bars, 2, 0, GPU_COLOR);
-        bar_chart(segs[4], f.buffer_mut(), &gpu_mem_bars, 1, 0, VRAM_COLOR);
-        segs[6]
-    } else {
-        segs[2]
-    };
-
-    // Memory bar: a single segment scaled against total RAM, with the same
-    // threshold coloring used by the other bars.
-    let mem_frac = mem.used as f64 / mem.total.max(1) as f64;
-    bar_chart(mem_seg, f.buffer_mut(), &[mem_frac], 2, 0, MEM_COLOR);
+    bar_chart(segs[2], f.buffer_mut(), &[mem_frac], 2, 0, MEM_COLOR);
+    if has_gpu {
+        bar_chart(segs[4], f.buffer_mut(), &gpu_bars, 2, 0, GPU_COLOR);
+        bar_chart(segs[6], f.buffer_mut(), &gpu_mem_bars, 1, 0, VRAM_COLOR);
+    }
 
     // --- Graph: lines sharing one axis. Draw the flatter/quieter ones first so
     // the lines you watch most (CPU/GPU) win the cell color on overlap. ---
@@ -165,15 +166,47 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
         series.push((&gpu_hist, GPU_COLOR));
     }
     series.push((&cpu_hist, CPU_COLOR));
+    history_multi(graph, f.buffer_mut(), &series, 100.0);
 
-    // White tick mark every minute along the bottom of the graph.
-    let secs_per_sample = app.stats_interval.as_secs_f64().max(0.001);
-    let tick_period_dots = (60.0 / secs_per_sample).round() as u32;
-    history_multi(graph, f.buffer_mut(), &series, 100.0, tick_period_dots);
+    // White ▴ tick marks on the bottom frame at one-minute intervals, counted
+    // back from the right edge (newest sample).
+    draw_time_ticks(f, graph, app.stats_interval.as_secs_f64());
+}
+
+/// Place a ▴ on the bottom border row at one-minute boundaries within the
+/// graph's horizontal span. Each character cell holds two samples, so the
+/// character period is `60s / (interval * 2)`.
+fn draw_time_ticks(f: &mut Frame, graph: Rect, secs_per_sample: f64) {
+    if graph.width == 0 {
+        return;
+    }
+    let chars_per_tick = (60.0 / (secs_per_sample.max(0.001) * 2.0)).round() as u16;
+    if chars_per_tick == 0 {
+        return;
+    }
+    let tick_y = graph.bottom(); // the row just below `inner` is the bottom frame
+    let right_x = graph.right() - 1;
+    let mut k: u16 = 1;
+    loop {
+        let Some(off) = chars_per_tick.checked_mul(k) else {
+            break;
+        };
+        let Some(x) = right_x.checked_sub(off) else {
+            break;
+        };
+        if x < graph.left() {
+            break;
+        }
+        if let Some(cell) = f.buffer_mut().cell_mut((x, tick_y)) {
+            cell.set_char('▴');
+            cell.fg = Color::White;
+        }
+        k += 1;
+    }
 }
 
 /// The left gutter: one color-coded readout per row, doubling as the legend
-/// for the graph lines (CPU / GPU util / GPU mem / system memory).
+/// for the graph lines (CPU / memory / GPU util / GPU mem).
 fn render_gutter(f: &mut Frame, area: Rect, snap: &Snapshot) {
     let has_gpu = !snap.gpus.is_empty();
     let (gpu_line, vram_line) = if has_gpu {
@@ -192,12 +225,12 @@ fn render_gutter(f: &mut Frame, area: Rect, snap: &Snapshot) {
     };
     let lines = vec![
         Line::from(bold(format!("CPU {:>3.0}%", snap.cpu.global_usage), CPU_COLOR)),
-        gpu_line,
-        vram_line,
         Line::from(bold(
             format!("MEM {:>3.0}%", snap.memory.used_fraction() * 100.0),
             MEM_COLOR,
         )),
+        gpu_line,
+        vram_line,
     ];
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -208,15 +241,32 @@ fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
 }
 
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
-    let title = format!(" PROCESSES  {} ", app.snapshot.process_count);
-    let inner = bordered(f, area, Line::from(bold(title, PROC_COLOR)), PROC_COLOR);
+    let snap = &app.snapshot;
+    let show_gpu = !snap.gpus.is_empty();
+
+    // Column headers ride the top frame as a left-aligned title; the process
+    // count sits on the right. Headers use the reversed style of the previous
+    // in-content header row so they read as a header bar.
+    let headers = process_header_text(show_gpu);
+    let header_title = Line::from(Span::styled(
+        headers,
+        Style::new()
+            .fg(PROC_COLOR)
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+    ));
+    let count_title = Line::from(bold(format!(" {} procs ", snap.process_count), PROC_COLOR))
+        .right_aligned();
+
+    let block = Block::bordered()
+        .border_style(Style::new().fg(PROC_COLOR))
+        .title(header_title)
+        .title(count_title);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
     if !app.ready || inner.height == 0 {
         return;
     }
-    let snap = &app.snapshot;
-
-    let show_gpu = !snap.gpus.is_empty();
 
     // Highest CPU first.
     let mut procs: Vec<&ProcessMetrics> = snap.processes.iter().collect();
@@ -226,33 +276,28 @@ fn render_processes(f: &mut Frame, area: Rect, app: &App) {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    let mut lines: Vec<Line> = Vec::with_capacity(inner.height as usize);
-    lines.push(process_header(show_gpu));
-    let rows = (inner.height as usize).saturating_sub(1);
-    for p in procs.into_iter().take(rows) {
-        lines.push(process_row(p, show_gpu, inner.width));
-    }
+    let rows = inner.height as usize;
+    let lines: Vec<Line> = procs
+        .into_iter()
+        .take(rows)
+        .map(|p| process_row(p, show_gpu, inner.width))
+        .collect();
 
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Header row, matching the column widths used by [`process_row`].
-fn process_header(show_gpu: bool) -> Line<'static> {
+/// Column-header text, matching the column widths used by [`process_row`] so
+/// it aligns with the data when rendered on the top frame as a title.
+fn process_header_text(show_gpu: bool) -> String {
     let gpu = if show_gpu {
         format!(" {:>9}", "GPU MEM")
     } else {
         String::new()
     };
-    let text = format!(
+    format!(
         "{:>7} {:<8} {:>5} {:>9}{} {}",
         "PID", "USER", "CPU%", "MEM", gpu, "COMMAND"
-    );
-    Line::from(Span::styled(
-        text,
-        Style::new()
-            .fg(PROC_COLOR)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED),
-    ))
+    )
 }
 
 /// One process row. The CPU% cell is colored by load (a process at >=100% — a

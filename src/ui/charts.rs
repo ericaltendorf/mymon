@@ -90,17 +90,7 @@ fn draw_series(canvas: &mut BrailleCanvas, samples: &[f64], max: f64, color: Col
 
 /// Draw several line series sharing one set of axes into `area`. Each series is
 /// drawn in a single fixed color; later series win color on overlapping cells.
-///
-/// If `tick_period_dots > 0`, white tick marks are drawn at the bottom of the
-/// graph every `tick_period_dots` dot-columns back from "now" (the right edge).
-/// They're rendered last so they remain visible even where a series sits at 0%.
-pub fn history_multi(
-    area: Rect,
-    buf: &mut Buffer,
-    series: &[(&[f64], Color)],
-    max: f64,
-    tick_period_dots: u32,
-) {
+pub fn history_multi(area: Rect, buf: &mut Buffer, series: &[(&[f64], Color)], max: f64) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -108,38 +98,7 @@ pub fn history_multi(
     for (samples, color) in series {
         draw_series(&mut canvas, samples, max, *color);
     }
-    draw_ticks(&mut canvas, tick_period_dots);
     canvas.render_to(area, buf);
-}
-
-fn draw_ticks(canvas: &mut BrailleCanvas, period: u32) {
-    if period == 0 {
-        return;
-    }
-    let dot_w = canvas.dot_width();
-    let dot_h = canvas.dot_height();
-    if dot_w == 0 || dot_h == 0 {
-        return;
-    }
-    // Two-dot vertical tick at the bottom of the graph, going backward in time
-    // from the newest sample at the right edge.
-    let right = dot_w - 1;
-    let bottom = dot_h - 1;
-    let mut k: u32 = 1;
-    loop {
-        let offset = match k.checked_mul(period) {
-            Some(o) => o,
-            None => break,
-        };
-        let Some(x) = right.checked_sub(offset) else {
-            break;
-        };
-        canvas.set(x, bottom, Color::White);
-        if bottom > 0 {
-            canvas.set(x, bottom - 1, Color::White);
-        }
-        k += 1;
-    }
 }
 
 /// Bar height in dots for a fill fraction, with a persistent baseline: a value
