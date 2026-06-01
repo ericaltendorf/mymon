@@ -8,7 +8,11 @@ use ratatui::style::Color;
 
 use super::braille::BrailleCanvas;
 
+/// Orange used for the 75% bar-chart band.
+const ORANGE: Color = Color::Rgb(255, 140, 0);
+
 /// Map a fraction in `0.0..=1.0` to a green -> yellow -> red load color.
+/// Used for non-bar contexts (e.g. the CPU% column in the process list).
 pub fn load_color(frac: f64) -> Color {
     let f = frac.clamp(0.0, 1.0);
     // Two-segment linear gradient: green->yellow for the first half, then
@@ -21,6 +25,21 @@ pub fn load_color(frac: f64) -> Color {
         (220.0, lerp(200.0, 40.0, t))
     };
     Color::Rgb(r as u8, g as u8, 40)
+}
+
+/// Color a single dot of a bar by the bar fraction its position represents:
+/// the indicator `base` color in the bottom half, escalating to yellow above
+/// 50%, orange above 75%, and red above 90%.
+pub fn threshold_color(pct: f64, base: Color) -> Color {
+    if pct >= 0.9 {
+        Color::Red
+    } else if pct >= 0.75 {
+        ORANGE
+    } else if pct >= 0.5 {
+        Color::Yellow
+    } else {
+        base
+    }
 }
 
 fn lerp(a: f64, b: f64, t: f64) -> f64 {
@@ -39,13 +58,7 @@ fn value_row(value: f64, max: f64, dot_h: u32) -> u32 {
 }
 
 /// Plot one connected line series onto `canvas`, right-aligned (newest last).
-/// `color_at` resolves the color for a column given its raw value.
-fn draw_series(
-    canvas: &mut BrailleCanvas,
-    samples: &[f64],
-    max: f64,
-    color_at: impl Fn(f64) -> Color,
-) {
+fn draw_series(canvas: &mut BrailleCanvas, samples: &[f64], max: f64, color: Color) {
     let dot_w = canvas.dot_width();
     let dot_h = canvas.dot_height();
     let n = samples.len().min(dot_w as usize);
@@ -59,7 +72,6 @@ fn draw_series(
     for (i, &v) in recent.iter().enumerate() {
         let x = x_offset + i as u32;
         let y = value_row(v, max, dot_h);
-        let color = color_at(v);
         match prev_y {
             // Connect consecutive samples with a vertical run so the line is
             // continuous even across steep changes.
@@ -72,16 +84,56 @@ fn draw_series(
 
 /// Draw several line series sharing one set of axes into `area`. Each series is
 /// drawn in a single fixed color; later series win color on overlapping cells.
-pub fn history_multi(area: Rect, buf: &mut Buffer, series: &[(&[f64], Color)], max: f64) {
+///
+/// If `tick_period_dots > 0`, white tick marks are drawn at the bottom of the
+/// graph every `tick_period_dots` dot-columns back from "now" (the right edge).
+/// They're rendered last so they remain visible even where a series sits at 0%.
+pub fn history_multi(
+    area: Rect,
+    buf: &mut Buffer,
+    series: &[(&[f64], Color)],
+    max: f64,
+    tick_period_dots: u32,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let mut canvas = BrailleCanvas::new(area.width, area.height);
     for (samples, color) in series {
-        let color = *color;
-        draw_series(&mut canvas, samples, max, move |_| color);
+        draw_series(&mut canvas, samples, max, *color);
     }
+    draw_ticks(&mut canvas, tick_period_dots);
     canvas.render_to(area, buf);
+}
+
+fn draw_ticks(canvas: &mut BrailleCanvas, period: u32) {
+    if period == 0 {
+        return;
+    }
+    let dot_w = canvas.dot_width();
+    let dot_h = canvas.dot_height();
+    if dot_w == 0 || dot_h == 0 {
+        return;
+    }
+    // Two-dot vertical tick at the bottom of the graph, going backward in time
+    // from the newest sample at the right edge.
+    let right = dot_w - 1;
+    let bottom = dot_h - 1;
+    let mut k: u32 = 1;
+    loop {
+        let offset = match k.checked_mul(period) {
+            Some(o) => o,
+            None => break,
+        };
+        let Some(x) = right.checked_sub(offset) else {
+            break;
+        };
+        canvas.set(x, bottom, Color::White);
+        if bottom > 0 {
+            canvas.set(x, bottom - 1, Color::White);
+        }
+        k += 1;
+    }
 }
 
 /// Bar height in dots for a fill fraction, with a persistent baseline: a value
@@ -105,8 +157,17 @@ fn bar_height(frac: f64, dot_h: u32) -> u32 {
 ///
 /// Each value occupies `bar_dots` dot-columns (use `1` for the "half a
 /// character wide" per-core look) followed by `gap_dots` empty dot-columns.
-/// Bars grow up from the bottom and are colored by value.
-pub fn bar_chart(area: Rect, buf: &mut Buffer, values: &[f64], bar_dots: u32, gap_dots: u32) {
+/// Bars grow up from the bottom; each lit dot is colored by its vertical
+/// position via [`threshold_color`], so the upper bands flash yellow/orange/red
+/// while the rest of the bar carries the metric's `base` indicator color.
+pub fn bar_chart(
+    area: Rect,
+    buf: &mut Buffer,
+    values: &[f64],
+    bar_dots: u32,
+    gap_dots: u32,
+    base: Color,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -122,54 +183,21 @@ pub fn bar_chart(area: Rect, buf: &mut Buffer, values: &[f64], bar_dots: u32, ga
         }
         let frac = v.clamp(0.0, 1.0);
         let height = bar_height(frac, dot_h);
-        let color = load_color(frac);
-        for dx in 0..bar_dots {
-            if x + dx >= dot_w {
-                break;
+        // Light each dot of the bar; coloring by dot position means cells in
+        // the upper bands pick up their threshold color (last writer wins per
+        // cell in the canvas, so each cell ends up the color of its topmost
+        // lit dot).
+        for h in 0..height {
+            let y = dot_h - 1 - h;
+            let dot_pct = (h + 1) as f64 / dot_h as f64;
+            let color = threshold_color(dot_pct, base);
+            for dx in 0..bar_dots {
+                if x + dx < dot_w {
+                    canvas.set(x + dx, y, color);
+                }
             }
-            canvas.set_bar(x + dx, height, color);
         }
         x += stride;
-    }
-
-    canvas.render_to(area, buf);
-}
-
-/// Draw a single vertical bar made of stacked `segments`, each
-/// `(fraction_of_full_height, color)`, stacked from the bottom up. The bar is
-/// `bar_dots` dot-columns wide and left-aligned in `area`. Cumulative height is
-/// clamped to the top, so overflowing segments are simply cut off.
-pub fn stacked_bar(area: Rect, buf: &mut Buffer, segments: &[(f64, Color)], bar_dots: u32) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let mut canvas = BrailleCanvas::new(area.width, area.height);
-    let dot_w = canvas.dot_width();
-    let dot_h = canvas.dot_height();
-    let cols = bar_dots.min(dot_w);
-
-    let mut filled = 0u32; // dots already filled, measured from the bottom
-    for (frac, color) in segments {
-        if filled >= dot_h {
-            break;
-        }
-        let h = (frac.clamp(0.0, 1.0) * dot_h as f64).round() as u32;
-        let top = (filled + h).min(dot_h);
-        for b in filled..top {
-            let y = dot_h - 1 - b;
-            for dx in 0..cols {
-                canvas.set(dx, y, *color);
-            }
-        }
-        filled = top;
-    }
-
-    // Persistent baseline: keep the bar visible even when everything is ~0.
-    if filled == 0 {
-        let color = segments.first().map(|(_, c)| *c).unwrap_or(Color::Gray);
-        for dx in 0..cols {
-            canvas.set(dx, dot_h - 1, color);
-        }
     }
 
     canvas.render_to(area, buf);

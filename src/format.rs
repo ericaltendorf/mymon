@@ -4,61 +4,52 @@
 
 use std::time::Duration;
 
-/// Condense a verbose CPU brand string down to the distinctive model name.
+use crate::metrics::GpuMetrics;
+
+/// Extract the distinctive model-number tokens from a CPU or GPU brand string.
 ///
-/// e.g. `"13th Gen Intel(R) Core(TM) i7-1370P"` -> `"i7-1370P"`,
-/// `"AMD Ryzen 9 5950X 16-Core Processor"` -> `"Ryzen 9 5950X"`,
-/// `"Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"` -> `"Xeon Gold 6248"`.
-pub fn cpu_model(brand: &str) -> String {
-    let mut s = brand.to_string();
-    for junk in ["(R)", "(r)", "(TM)", "(tm)", "\u{00ae}", "\u{2122}"] {
-        s = s.replace(junk, " ");
-    }
-    // Drop a trailing APU graphics blurb and any "@ 3.50GHz" frequency.
-    if let Some(i) = s.find("w/") {
-        s.truncate(i);
-    }
-    if let Some(i) = s.find('@') {
-        s.truncate(i);
-    }
-
-    const DROP: [&str; 8] = [
-        "Intel",
-        "AMD",
-        "CPU",
-        "Processor",
-        "Core",
-        "Gen",
-        "with",
-        "Technology",
-    ];
-    let kept: Vec<&str> = s
+/// A token qualifies as a model-number token when it has at least three digit
+/// characters and digits make up at least half of its characters. That picks
+/// out things like `i7-1370P`, `5950X`, `A6000` and drops vendor names,
+/// marketing words, generation ordinals (`13th`), core counts (`16-Core`) and
+/// frequency suffixes (`2.50GHz`). If nothing qualifies the input is returned
+/// trimmed, so unusual brands degrade gracefully.
+pub fn model_number(brand: &str) -> String {
+    let kept: Vec<&str> = brand
         .split_whitespace()
-        .filter(|tok| {
-            // Marketing/generation noise: "13th", "1st", "16-Core", ...
-            if let Some(stem) = tok
-                .strip_suffix("th")
-                .or_else(|| tok.strip_suffix("st"))
-                .or_else(|| tok.strip_suffix("nd"))
-                .or_else(|| tok.strip_suffix("rd"))
-            {
-                if !stem.is_empty() && stem.chars().all(|c| c.is_ascii_digit()) {
-                    return false;
-                }
-            }
-            if tok.ends_with("-Core") {
-                return false;
-            }
-            !DROP.contains(tok)
-        })
+        .filter(|tok| is_model_token(tok))
         .collect();
-
-    let result = kept.join(" ");
-    if result.is_empty() {
+    if kept.is_empty() {
         brand.trim().to_string()
     } else {
-        result
+        kept.join(" ")
     }
+}
+
+fn is_model_token(tok: &str) -> bool {
+    let digits = tok.chars().filter(|c| c.is_ascii_digit()).count();
+    let total = tok.chars().count();
+    digits >= 3 && digits * 2 >= total
+}
+
+/// Group GPUs by extracted model and format like `"A6000x4"` or
+/// `"A6000x2 + 4090"`. Empty when there are no GPUs.
+pub fn gpu_summary(gpus: &[GpuMetrics]) -> String {
+    let mut groups: Vec<(String, usize)> = Vec::new();
+    for gpu in gpus {
+        let model = model_number(&gpu.name);
+        let same = groups.last().is_some_and(|(m, _)| m == &model);
+        if same {
+            groups.last_mut().unwrap().1 += 1;
+        } else {
+            groups.push((model, 1));
+        }
+    }
+    groups
+        .iter()
+        .map(|(m, n)| if *n > 1 { format!("{m}x{n}") } else { m.clone() })
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 /// Format a byte count using binary (IEC) units: B, KiB, MiB, ...

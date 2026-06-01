@@ -44,6 +44,7 @@ pub struct App {
     pub cpu_history: History,
     pub mem_history: History,
     pub gpu_history: History,
+    pub gpu_mem_history: History,
     pub stats_interval: Duration,
     pub process_interval: Duration,
     last_stats: Instant,
@@ -60,6 +61,7 @@ impl App {
             cpu_history: History::default(),
             mem_history: History::default(),
             gpu_history: History::default(),
+            gpu_mem_history: History::default(),
             stats_interval,
             process_interval,
             last_stats: Instant::now(),
@@ -79,6 +81,8 @@ impl App {
         self.mem_history
             .push(self.snapshot.memory.used_fraction() * 100.0);
         self.gpu_history.push(mean_gpu_util(&self.snapshot));
+        self.gpu_mem_history
+            .push(mean_gpu_mem(&self.snapshot) * 100.0);
         self.ready = true;
         self.last_stats = Instant::now();
     }
@@ -129,4 +133,13 @@ pub fn mean_gpu_util(snap: &Snapshot) -> f64 {
     } else {
         utils.iter().sum::<f64>() / utils.len() as f64
     }
+}
+
+/// Mean GPU memory used fraction across all GPUs (0.0..=1.0), or 0 if none.
+pub fn mean_gpu_mem(snap: &Snapshot) -> f64 {
+    if snap.gpus.is_empty() {
+        return 0.0;
+    }
+    let sum: f64 = snap.gpus.iter().map(|g| g.memory_used_fraction()).sum();
+    sum / snap.gpus.len() as f64
 }

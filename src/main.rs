@@ -96,18 +96,20 @@ mod tests {
     }
 
     #[test]
-    fn cpu_model_examples() {
+    fn model_number_examples() {
         assert_eq!(
-            format::cpu_model("13th Gen Intel(R) Core(TM) i7-1370P"),
+            format::model_number("13th Gen Intel(R) Core(TM) i7-1370P"),
             "i7-1370P"
         );
         assert_eq!(
-            format::cpu_model("AMD Ryzen 9 5950X 16-Core Processor"),
-            "Ryzen 9 5950X"
+            format::model_number("AMD Ryzen 9 5950X 16-Core Processor"),
+            "5950X"
         );
         assert_eq!(
-            format::cpu_model("Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"),
-            "Xeon Gold 6248"
+            format::model_number("Intel(R) Xeon(R) Gold 6248 CPU @ 2.50GHz"),
+            "6248"
         );
+        assert_eq!(format::model_number("NVIDIA RTX A6000"), "A6000");
+        assert_eq!(format::model_number("NVIDIA GeForce RTX 4090"), "4090");
     }
 }

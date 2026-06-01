@@ -84,16 +84,6 @@ impl BrailleCanvas {
         }
     }
 
-    /// Draw a bar in dot-column `x` of `height` dots growing up from the bottom.
-    pub fn set_bar(&mut self, x: u32, height: u32, color: Color) {
-        if height == 0 {
-            return;
-        }
-        let dh = self.dot_height();
-        let top = dh.saturating_sub(height);
-        self.set_vline(x, top, dh - 1, color);
-    }
-
     /// Blit the accumulated dots into `buf` at `area`. Empty cells are left
     /// untouched so a caller can draw on top of an existing background.
     pub fn render_to(&self, area: Rect, buf: &mut Buffer) {
