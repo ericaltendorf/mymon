@@ -34,8 +34,14 @@ light magenta); bar cells that climb into the upper bands flash yellow
 above 50%, orange above 75%, and red above 90%. The `M`/`G` suffixes in
 the memory columns are dimmed so the numbers read first. White ▴ marks
 on the bottom frame of the overview are one-minute time ticks counted
-back from "now" at the right edge of the graph. The left process pane
-is sorted by CPU, the right by resident memory.
+back from "now" at the right edge of the graph.
+
+The left process pane is sorted by CPU with CPU% color-coded by per-core
+saturation; the right pane is sorted by resident memory with MEM
+color-coded by share of total RAM (green / yellow ≥10% / orange ≥25% /
+red ≥50%). CPU usage drops its decimal once a process is using ten or
+more full cores, so a maxed-out 64-core box reads as ` 6400` rather
+than overflowing the column.
 
 The CPU and GPU model numbers in the title are extracted by digit
 density (so `13th Gen Intel(R) Core(TM) i7-1370P` collapses to

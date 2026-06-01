@@ -313,10 +313,11 @@ fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
     }
 
     let rows = inner.height as usize;
+    let total_ram = snap.memory.total;
     let lines: Vec<Line> = procs
         .into_iter()
         .take(rows)
-        .map(|p| process_row(p, show_gpu, inner.width))
+        .map(|p| process_row(p, show_gpu, inner.width, sort, total_ram))
         .collect();
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -345,14 +346,28 @@ fn process_header_text(show_gpu: bool) -> String {
     )
 }
 
-/// One process row. The CPU% cell is colored by load (a process at >=100% — a
-/// full core — reads as hot). Memory cells split the number and the unit
-/// suffix into separate spans so the suffix can be dimmed. The command is
-/// truncated to the remaining width.
-fn process_row(p: &ProcessMetrics, show_gpu: bool, width: u16) -> Line<'static> {
+/// One process row. The "active" column for the pane's sort dimension is
+/// colored by load — CPU% by per-core saturation in the CPU pane, MEM by
+/// fraction of total system RAM in the MEM pane. Memory cells split the
+/// number and the unit suffix into separate spans so the suffix can be
+/// dimmed. The command is truncated to the remaining width.
+fn process_row(
+    p: &ProcessMetrics,
+    show_gpu: bool,
+    width: u16,
+    sort: ProcSort,
+    total_ram: u64,
+) -> Line<'static> {
     let user = truncate(p.user.as_deref().unwrap_or("?"), 8);
     let prefix = format!("{:>7} {:<8} ", p.pid, user);
-    let cpu_s = format!("{:>5.1}", p.cpu_usage);
+    // Drop the decimal once a process is using a full ten cores or more so
+    // a maxed-out 64-core box reads as " 6400" rather than overflowing the
+    // 5-char column.
+    let cpu_s = if p.cpu_usage >= 1000.0 {
+        format!("{:>5.0}", p.cpu_usage)
+    } else {
+        format!("{:>5.1}", p.cpu_usage)
+    };
 
     let (mem_num, mem_unit) = format::bytes_short(p.memory);
     let mem_num_str = format!(" {mem_num:>4}");
@@ -379,17 +394,44 @@ fn process_row(p: &ProcessMetrics, show_gpu: bool, width: u16) -> Line<'static> 
     let cmd_w = (width as usize).saturating_sub(used);
     let cmd = truncate(&p.name, cmd_w);
 
-    let cpu_frac = (p.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
     let unit_style = Style::new().fg(Color::DarkGray);
+    let (cpu_style, mem_style) = match sort {
+        ProcSort::Cpu => {
+            let cpu_frac = (p.cpu_usage as f64 / 100.0).clamp(0.0, 1.0);
+            (Style::new().fg(load_color(cpu_frac)), Style::new())
+        }
+        ProcSort::Mem => {
+            let mem_frac = if total_ram == 0 {
+                0.0
+            } else {
+                p.memory as f64 / total_ram as f64
+            };
+            (Style::new(), Style::new().fg(mem_load_color(mem_frac)))
+        }
+    };
     Line::from(vec![
         Span::raw(prefix),
-        Span::styled(cpu_s, Style::new().fg(load_color(cpu_frac))),
-        Span::raw(mem_num_str),
+        Span::styled(cpu_s, cpu_style),
+        Span::styled(mem_num_str, mem_style),
         Span::styled(mem_unit, unit_style),
         Span::raw(gpu_num_str),
         Span::styled(gpu_unit, unit_style),
         Span::raw(format!(" {cmd}")),
     ])
+}
+
+/// Banded color for a process's share of total system memory: green at idle,
+/// yellow at >=10%, orange at >=25%, red at >=50%.
+fn mem_load_color(frac: f64) -> Color {
+    if frac >= 0.50 {
+        Color::Red
+    } else if frac >= 0.25 {
+        Color::Rgb(255, 140, 0)
+    } else if frac >= 0.10 {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
 }
 
 /// Truncate `s` to at most `max` characters, using an ellipsis when cut.
