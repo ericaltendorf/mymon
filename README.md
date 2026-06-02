@@ -49,8 +49,10 @@ density (so `13th Gen Intel(R) Core(TM) i7-1370P` collapses to
 `i7-1370P` and `NVIDIA RTX A6000` collapses to `A6000`). Repeated GPUs
 are folded into `A6000x4`.
 
-When the process area is narrower than 110 columns the dual pane
-collapses to a single CPU-sorted pane.
+When the process area is narrower than 110 columns the CPU and MEM
+panes stack vertically (CPU on top), provided the area is at least 10
+rows tall. Below either threshold it collapses to a single CPU-sorted
+pane.
 
 ## Build and run
 

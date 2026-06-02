@@ -281,9 +281,12 @@ fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
     b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
 }
 
-/// Below this width we collapse to a single CPU-sorted pane; at or above we
-/// split into side-by-side CPU- and MEM-sorted panes.
+/// At or above this width the CPU- and MEM-sorted panes sit side by side.
 const PROC_DUAL_MIN_WIDTH: u16 = 110;
+/// Minimum process-area height to stack the CPU pane on top of the MEM pane
+/// when too narrow for side-by-side. Each pane is 2 frame rows + at least 3
+/// content rows, so two stacked panes need 10 rows.
+const PROC_STACK_MIN_HEIGHT: u16 = 10;
 
 fn render_processes(f: &mut Frame, area: Rect, app: &App) {
     if area.width >= PROC_DUAL_MIN_WIDTH {
@@ -291,6 +294,11 @@ fn render_processes(f: &mut Frame, area: Rect, app: &App) {
             Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
         render_process_pane(f, left, app, ProcSort::Cpu);
         render_process_pane(f, right, app, ProcSort::Mem);
+    } else if area.height >= PROC_STACK_MIN_HEIGHT {
+        let [top, bottom] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
+        render_process_pane(f, top, app, ProcSort::Cpu);
+        render_process_pane(f, bottom, app, ProcSort::Mem);
     } else {
         render_process_pane(f, area, app, ProcSort::Cpu);
     }
