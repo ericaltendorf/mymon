@@ -300,13 +300,16 @@ fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
     let snap = &app.snapshot;
     let show_gpu = !snap.gpus.is_empty();
 
-    // Column headers ride the top frame as the block title; the sort dimension
-    // is implicit from the column with the descending values.
+    // Column headers ride the top frame as the block title. Spaces between
+    // and around the labels become `─` so the frame appears to flow through
+    // the gaps, with the label words sitting on top of it.
+    let header_text: String = process_header_text(show_gpu)
+        .chars()
+        .map(|c| if c == ' ' { '─' } else { c })
+        .collect();
     let header_title = Line::from(Span::styled(
-        process_header_text(show_gpu),
-        Style::new()
-            .fg(PROC_COLOR)
-            .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        header_text,
+        Style::new().fg(PROC_COLOR).add_modifier(Modifier::BOLD),
     ));
 
     let block = Block::bordered()
