@@ -40,22 +40,32 @@ const GUTTER_W: u16 = 9;
 
 /// Render the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &App) {
-    // The overview block stays compact (up to 4 content rows); the status bar
-    // at the bottom is always 1 row; everything left over flows into the
-    // process list in the middle.
-    let [top_area, proc_area, status_area] = Layout::vertical([
-        Constraint::Max(STAT_BLOCK_ROWS),
-        Constraint::Fill(1),
-        Constraint::Length(1),
-    ])
-    .areas(f.area());
-
-    render_overview(f, top_area, app);
-    render_processes(f, proc_area, app);
-    render_status_bar(f, status_area, app);
+    // The overview block stays compact (up to 4 content rows). A status bar
+    // at the bottom only appears when there's something to say — a kill
+    // prompt is active, or the user has toggled help on with h/?. Otherwise
+    // the row goes back to the process list.
+    let show_status = app.kill_prompt.is_some() || app.show_help;
+    if show_status {
+        let [top_area, proc_area, status_area] = Layout::vertical([
+            Constraint::Max(STAT_BLOCK_ROWS),
+            Constraint::Fill(1),
+            Constraint::Length(1),
+        ])
+        .areas(f.area());
+        render_overview(f, top_area, app);
+        render_processes(f, proc_area, app);
+        render_status_bar(f, status_area, app);
+    } else {
+        let [top_area, proc_area] =
+            Layout::vertical([Constraint::Max(STAT_BLOCK_ROWS), Constraint::Fill(1)])
+                .areas(f.area());
+        render_overview(f, top_area, app);
+        render_processes(f, proc_area, app);
+    }
 }
 
-/// Bottom status row: either a kill-confirm prompt or terse key hints.
+/// Bottom status row: kill-confirm prompt (if armed) takes precedence over
+/// help; only called when the layout has reserved a row.
 fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let line = if let Some((pid, name)) = &app.kill_prompt {
         Line::from(Span::styled(
@@ -66,7 +76,7 @@ fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
         ))
     } else {
         Line::from(Span::styled(
-            " ↑/↓ select · tab pane · k kill · q quit ",
+            " ↑/↓ select · tab pane · k kill · h hide help · q quit ",
             Style::new().fg(Color::DarkGray),
         ))
     };

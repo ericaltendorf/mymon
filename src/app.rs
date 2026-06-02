@@ -65,6 +65,10 @@ pub struct App {
     /// When `Some`, the bottom status bar is showing a kill-confirm prompt
     /// for this `(pid, command)`. `y` sends SIGTERM, anything else cancels.
     pub kill_prompt: Option<(u32, String)>,
+    /// Toggled by `h` / `?`. When true (and no kill prompt is active) the
+    /// bottom status bar renders a key-hints line; otherwise the status row
+    /// is reclaimed by the process list.
+    pub show_help: bool,
 }
 
 impl App {
@@ -85,6 +89,7 @@ impl App {
             selected_index: 0,
             active_pane: ProcSort::Cpu,
             kill_prompt: None,
+            show_help: false,
         };
         // Prime once so the first frame has data (processes included).
         app.on_stats_tick();

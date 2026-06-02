@@ -79,6 +79,7 @@ fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
         KeyCode::Down => app.move_selection(1),
         KeyCode::Tab => app.toggle_pane(),
         KeyCode::Char('k') => app.request_kill_selected(),
+        KeyCode::Char('h') | KeyCode::Char('?') => app.show_help = !app.show_help,
         _ => {}
     }
 }

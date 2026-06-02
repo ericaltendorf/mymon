@@ -25,8 +25,8 @@ memory.
 │   1959 alice      0.1  8.2M     - tmux                   ││   1685 alice      0.4 12.3M     - zsh                    │
 │   2096 root       0.1 20.5M     - systemd                ││   2233 root       0.0  9.2M     - dbus-daemon            │
 │   2233 root       0.0  9.2M     - dbus-daemon            ││   1959 alice      0.1  8.2M     - tmux                   │
+│                                                          ││                                                          │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
- ↑/↓ select · tab pane · k kill · q quit
 ```
 
 In a real terminal the gutter readouts, bar columns and history lines
@@ -68,6 +68,7 @@ Key bindings:
 | `Tab` | Switch the active pane between CPU- and MEM-sorted (dual-pane only) |
 | `k` | Arm a kill-confirm prompt for the selected process |
 | `y` | Confirm pending kill (sends SIGTERM); anything else cancels |
+| `h` / `?` | Toggle the bottom key-hints line |
 | `q` / `Esc` / `Ctrl-C` | Quit |
 
 GPU monitoring requires NVIDIA NVML (the `libnvidia-ml` library that
