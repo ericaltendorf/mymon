@@ -55,9 +55,30 @@ fn run(terminal: &mut ratatui::DefaultTerminal, mut app: App) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, code: KeyCode, mods: KeyModifiers) {
+    // Ctrl-C always quits, even mid-prompt.
+    if let KeyCode::Char('c') = code {
+        if mods.contains(KeyModifiers::CONTROL) {
+            app.should_quit = true;
+            return;
+        }
+    }
+
+    // A pending kill-confirm prompt swallows the next keystroke: 'y' commits,
+    // anything else (including q/Esc) cancels without killing or quitting.
+    if app.kill_prompt.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_kill(),
+            _ => app.cancel_kill(),
+        }
+        return;
+    }
+
     match code {
         KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-        KeyCode::Char('c') if mods.contains(KeyModifiers::CONTROL) => app.should_quit = true,
+        KeyCode::Up => app.move_selection(-1),
+        KeyCode::Down => app.move_selection(1),
+        KeyCode::Tab => app.toggle_pane(),
+        KeyCode::Char('k') => app.request_kill_selected(),
         _ => {}
     }
 }

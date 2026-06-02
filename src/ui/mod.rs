@@ -18,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::app::{App, mean_gpu_mem, mean_gpu_util};
+use crate::app::{App, ProcSort, mean_gpu_mem, mean_gpu_util};
 use crate::format;
 use crate::metrics::{ProcessMetrics, Snapshot};
 
@@ -40,13 +40,37 @@ const GUTTER_W: u16 = 9;
 
 /// Render the whole UI for one frame.
 pub fn render(f: &mut Frame, app: &App) {
-    // The overview block stays compact (up to 4 content rows); everything left
-    // over flows into the process list below.
-    let [top_area, proc_area] =
-        Layout::vertical([Constraint::Max(STAT_BLOCK_ROWS), Constraint::Fill(1)]).areas(f.area());
+    // The overview block stays compact (up to 4 content rows); the status bar
+    // at the bottom is always 1 row; everything left over flows into the
+    // process list in the middle.
+    let [top_area, proc_area, status_area] = Layout::vertical([
+        Constraint::Max(STAT_BLOCK_ROWS),
+        Constraint::Fill(1),
+        Constraint::Length(1),
+    ])
+    .areas(f.area());
 
     render_overview(f, top_area, app);
     render_processes(f, proc_area, app);
+    render_status_bar(f, status_area, app);
+}
+
+/// Bottom status row: either a kill-confirm prompt or terse key hints.
+fn render_status_bar(f: &mut Frame, area: Rect, app: &App) {
+    let line = if let Some((pid, name)) = &app.kill_prompt {
+        Line::from(Span::styled(
+            format!(" kill pid {pid} ({name}) — send SIGTERM? [y/N] "),
+            Style::new()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD | Modifier::REVERSED),
+        ))
+    } else {
+        Line::from(Span::styled(
+            " ↑/↓ select · tab pane · k kill · q quit ",
+            Style::new().fg(Color::DarkGray),
+        ))
+    };
+    f.render_widget(Paragraph::new(line), area);
 }
 
 fn bold(text: impl Into<String>, color: Color) -> Span<'static> {
@@ -257,13 +281,6 @@ fn desc(a: &f64, b: &f64) -> std::cmp::Ordering {
     b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal)
 }
 
-/// Sort dimension for a process pane.
-#[derive(Clone, Copy)]
-enum ProcSort {
-    Cpu,
-    Mem,
-}
-
 /// Below this width we collapse to a single CPU-sorted pane; at or above we
 /// split into side-by-side CPU- and MEM-sorted panes.
 const PROC_DUAL_MIN_WIDTH: u16 = 110;
@@ -314,10 +331,15 @@ fn render_process_pane(f: &mut Frame, area: Rect, app: &App, sort: ProcSort) {
 
     let rows = inner.height as usize;
     let total_ram = snap.memory.total;
+    let pane_is_active = app.active_pane == sort;
     let lines: Vec<Line> = procs
         .into_iter()
         .take(rows)
-        .map(|p| process_row(p, show_gpu, inner.width, sort, total_ram))
+        .enumerate()
+        .map(|(i, p)| {
+            let selected = pane_is_active && i == app.selected_index;
+            process_row(p, show_gpu, inner.width, sort, total_ram, selected)
+        })
         .collect();
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -357,6 +379,7 @@ fn process_row(
     width: u16,
     sort: ProcSort,
     total_ram: u64,
+    selected: bool,
 ) -> Line<'static> {
     let user = truncate(p.user.as_deref().unwrap_or("?"), 8);
     let prefix = format!("{:>7} {:<8} ", p.pid, user);
@@ -409,7 +432,7 @@ fn process_row(
             (Style::new(), Style::new().fg(mem_load_color(mem_frac)))
         }
     };
-    Line::from(vec![
+    let line = Line::from(vec![
         Span::raw(prefix),
         Span::styled(cpu_s, cpu_style),
         Span::styled(mem_num_str, mem_style),
@@ -417,7 +440,12 @@ fn process_row(
         Span::raw(gpu_num_str),
         Span::styled(gpu_unit, unit_style),
         Span::raw(format!(" {cmd}")),
-    ])
+    ]);
+    if selected {
+        line.patch_style(Style::new().bg(Color::DarkGray))
+    } else {
+        line
+    }
 }
 
 /// Banded color for a process's share of total system memory: green at idle,

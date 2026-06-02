@@ -129,6 +129,17 @@ impl Monitor {
         snap.disks = self.collect_disks(secs);
     }
 
+    /// Send SIGTERM to `pid` via sysinfo's per-process handle. Returns true if
+    /// the signal was delivered; false if the process is unknown to sysinfo or
+    /// the kernel refused (typically EPERM). The next `refresh_processes` will
+    /// pick up whether the process actually exited.
+    pub fn kill(&self, pid: u32) -> bool {
+        self.system
+            .process(sysinfo::Pid::from_u32(pid))
+            .and_then(|p| p.kill_with(sysinfo::Signal::Term))
+            .unwrap_or(false)
+    }
+
     /// Refresh the process table (the expensive part: a full `/proc` scan) and
     /// rebuild [`Snapshot::processes`] in place. Uses `snap.gpus` to attribute
     /// GPU memory to processes, so call [`refresh_stats`](Self::refresh_stats)

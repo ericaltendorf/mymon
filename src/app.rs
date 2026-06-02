@@ -9,8 +9,16 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::metrics::Snapshot;
+use crate::metrics::{ProcessMetrics, Snapshot};
 use crate::monitor::Monitor;
+
+/// Sort key for a process pane. Shared between the app's interaction state
+/// (which pane is active, what's being killed) and the renderer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProcSort {
+    Cpu,
+    Mem,
+}
 
 /// Maximum number of historical samples kept per series. This comfortably
 /// covers very wide terminals (graph width is `2 * columns` dots).
@@ -50,6 +58,13 @@ pub struct App {
     last_stats: Instant,
     last_process: Instant,
     pub should_quit: bool,
+    /// Index of the selected row in the active process pane (0 = top).
+    pub selected_index: usize,
+    /// Which process pane the selection lives in.
+    pub active_pane: ProcSort,
+    /// When `Some`, the bottom status bar is showing a kill-confirm prompt
+    /// for this `(pid, command)`. `y` sends SIGTERM, anything else cancels.
+    pub kill_prompt: Option<(u32, String)>,
 }
 
 impl App {
@@ -67,6 +82,9 @@ impl App {
             last_stats: Instant::now(),
             last_process: Instant::now(),
             should_quit: false,
+            selected_index: 0,
+            active_pane: ProcSort::Cpu,
+            kill_prompt: None,
         };
         // Prime once so the first frame has data (processes included).
         app.on_stats_tick();
@@ -106,6 +124,62 @@ impl App {
             refreshed = true;
         }
         refreshed
+    }
+
+    /// Move the selection up (`delta < 0`) or down (`delta > 0`). Clamped to
+    /// the current process count so the user can't run off the end.
+    pub fn move_selection(&mut self, delta: i32) {
+        let count = self.snapshot.processes.len();
+        if count == 0 {
+            self.selected_index = 0;
+            return;
+        }
+        let new_idx = if delta < 0 {
+            self.selected_index.saturating_sub((-delta) as usize)
+        } else {
+            self.selected_index
+                .saturating_add(delta as usize)
+                .min(count - 1)
+        };
+        self.selected_index = new_idx;
+    }
+
+    /// Switch which process pane the selection lives in (only meaningful in
+    /// dual-pane mode; cheap no-op in single-pane).
+    pub fn toggle_pane(&mut self) {
+        self.active_pane = match self.active_pane {
+            ProcSort::Cpu => ProcSort::Mem,
+            ProcSort::Mem => ProcSort::Cpu,
+        };
+    }
+
+    /// Look up the process at the active pane's selected index and arm the
+    /// kill-confirm prompt.
+    pub fn request_kill_selected(&mut self) {
+        let mut procs: Vec<&ProcessMetrics> = self.snapshot.processes.iter().collect();
+        match self.active_pane {
+            ProcSort::Cpu => procs.sort_by(|a, b| {
+                b.cpu_usage
+                    .partial_cmp(&a.cpu_usage)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            ProcSort::Mem => procs.sort_by(|a, b| b.memory.cmp(&a.memory)),
+        }
+        if let Some(p) = procs.get(self.selected_index) {
+            self.kill_prompt = Some((p.pid, p.name.clone()));
+        }
+    }
+
+    /// Send SIGTERM to the pending kill target and clear the prompt.
+    pub fn confirm_kill(&mut self) {
+        if let Some((pid, _)) = self.kill_prompt.take() {
+            let _ = self.monitor.kill(pid);
+        }
+    }
+
+    /// Drop the kill-confirm prompt without sending a signal.
+    pub fn cancel_kill(&mut self) {
+        self.kill_prompt = None;
     }
 
     /// How long the event loop may block before the next tick is due.

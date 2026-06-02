@@ -26,6 +26,7 @@ memory.
 │   2096 root       0.1 20.5M     - systemd                ││   2233 root       0.0  9.2M     - dbus-daemon            │
 │   2233 root       0.0  9.2M     - dbus-daemon            ││   1959 alice      0.1  8.2M     - tmux                   │
 └──────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────┘
+ ↑/↓ select · tab pane · k kill · q quit
 ```
 
 In a real terminal the gutter readouts, bar columns and history lines
@@ -57,7 +58,15 @@ collapses to a single CPU-sorted pane.
 cargo run --release
 ```
 
-Press `q`, `Esc`, or `Ctrl-C` to quit.
+Key bindings:
+
+| Key | Action |
+| --- | --- |
+| `↑` / `↓` | Move selection in the active process pane |
+| `Tab` | Switch the active pane between CPU- and MEM-sorted (dual-pane only) |
+| `k` | Arm a kill-confirm prompt for the selected process |
+| `y` | Confirm pending kill (sends SIGTERM); anything else cancels |
+| `q` / `Esc` / `Ctrl-C` | Quit |
 
 GPU monitoring requires NVIDIA NVML (the `libnvidia-ml` library that
 ships with the proprietary driver). Without it, GPU rows simply read
