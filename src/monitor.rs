@@ -129,11 +129,14 @@ impl Monitor {
         snap.disks = self.collect_disks(secs);
     }
 
-    /// Refresh disk free-space and return any "real" mount with fewer than
-    /// `threshold` bytes free. Skips pseudo-filesystems (tmpfs, squashfs,
-    /// overlay, etc.), well-known system mounts (`/proc`, `/sys`, `/dev`,
-    /// `/run`, `/snap`, `/boot/efi`), and partitions smaller than 1 GiB so
-    /// the ESP and ramdisks don't trigger noise.
+    /// Refresh disk free-space and return any "real" mount that's running
+    /// low: free space below `threshold` bytes AND below 5% of total. The
+    /// percentage gate keeps small special-purpose partitions like `/boot`
+    /// from firing whenever they happen to sit below the absolute limit —
+    /// only mounts that are both absolutely and proportionally tight fire.
+    /// Skips pseudo-filesystems (tmpfs, squashfs, overlay, …), well-known
+    /// system mounts (`/proc`, `/sys`, `/dev`, `/run`, `/snap`, `/boot/efi`),
+    /// and partitions smaller than 1 GiB.
     pub fn refresh_disk_warnings(&mut self, threshold: u64) -> Vec<(String, u64)> {
         self.disks
             .refresh_specifics(true, DiskRefreshKind::nothing().with_storage());
@@ -141,7 +144,11 @@ impl Monitor {
             .list()
             .iter()
             .filter(|d| is_real_mount(d))
-            .filter(|d| d.available_space() < threshold)
+            .filter(|d| {
+                let free = d.available_space();
+                let total = d.total_space();
+                free < threshold && total > 0 && (free as f64) < 0.05 * total as f64
+            })
             .map(|d| {
                 (
                     d.mount_point().to_string_lossy().into_owned(),
