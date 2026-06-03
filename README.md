@@ -75,13 +75,16 @@ GPU monitoring requires NVIDIA NVML (the `libnvidia-ml` library that
 ships with the proprietary driver). Without it, GPU rows simply read
 `--`.
 
-When a "real" disk mount (i.e. not a tmpfs/proc/sys/snap/EFI pseudo-fs)
-runs low — *both* less than 8 GiB free *and* less than 5% of its total
-capacity — the overview block's bottom border is overlaid with a red
-warning like `/ : 7G free` (multiple low mounts are separated with
-` · `). The percentage gate keeps small special-purpose partitions
-like `/boot` from firing on their own. Disk free space is sampled
-once a minute.
+Resource alerts overlay the overview block's bottom border in red and
+bold. Multiple alerts are comma-separated.
+
+- **Memory** fires when free RAM drops below 10% of total. Reads as
+  `MEM : 1.6G free`.
+- **Disk** fires when a "real" disk mount (i.e. not a
+  tmpfs/proc/sys/snap/EFI pseudo-fs) is *both* below 8 GiB free *and*
+  below 5% of its capacity. Reads as `/ : 7G free`. The percentage
+  gate keeps small special-purpose partitions like `/boot` from firing
+  on their own. Disk free space is sampled once a minute.
 
 ## Configuration
 

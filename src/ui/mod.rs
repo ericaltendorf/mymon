@@ -223,28 +223,32 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     // back from the right edge (newest sample).
     draw_time_ticks(f, graph, app.stats_interval.as_secs_f64());
 
-    // Low-disk warning paints over the bottom frame (drawn last so it wins
-    // any tick that would have lived in the same cell).
-    if !app.low_disks.is_empty() {
-        paint_disk_warning(f, area, &app.low_disks);
+    // Resource warnings paint over the bottom frame (drawn last so they win
+    // any tick that would have lived in the same cell). Currently: low RAM
+    // and any low disk mounts.
+    let mut alerts: Vec<String> = Vec::new();
+    let mem_free = mem.total.saturating_sub(mem.used);
+    if mem.total > 0 && (mem_free as f64) < 0.10 * mem.total as f64 {
+        let (n, u) = format::bytes_short(mem_free);
+        alerts.push(format!("MEM : {n}{u} free"));
+    }
+    for (mp, free) in &app.low_disks {
+        let (n, u) = format::bytes_short(*free);
+        alerts.push(format!("{mp} : {n}{u} free"));
+    }
+    if !alerts.is_empty() {
+        paint_warnings(f, area, &alerts);
     }
 }
 
-/// Paint a red, bold disk-low message across the bottom border of `area`,
+/// Paint red, bold resource warnings across the bottom border of `area`,
 /// starting just after the left corner. Truncates if it would run past the
 /// right corner.
-fn paint_disk_warning(f: &mut Frame, area: Rect, low_disks: &[(String, u64)]) {
+fn paint_warnings(f: &mut Frame, area: Rect, alerts: &[String]) {
     if area.width < 4 {
         return;
     }
-    let text = low_disks
-        .iter()
-        .map(|(mp, free)| {
-            let (n, u) = format::bytes_short(*free);
-            format!("{mp} : {n}{u} free")
-        })
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let text = alerts.join(", ");
     let pretty = format!(" {text} ");
 
     let style = Style::new()
