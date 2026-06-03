@@ -129,6 +129,28 @@ impl Monitor {
         snap.disks = self.collect_disks(secs);
     }
 
+    /// Refresh disk free-space and return any "real" mount with fewer than
+    /// `threshold` bytes free. Skips pseudo-filesystems (tmpfs, squashfs,
+    /// overlay, etc.), well-known system mounts (`/proc`, `/sys`, `/dev`,
+    /// `/run`, `/snap`, `/boot/efi`), and partitions smaller than 1 GiB so
+    /// the ESP and ramdisks don't trigger noise.
+    pub fn refresh_disk_warnings(&mut self, threshold: u64) -> Vec<(String, u64)> {
+        self.disks
+            .refresh_specifics(true, DiskRefreshKind::nothing().with_storage());
+        self.disks
+            .list()
+            .iter()
+            .filter(|d| is_real_mount(d))
+            .filter(|d| d.available_space() < threshold)
+            .map(|d| {
+                (
+                    d.mount_point().to_string_lossy().into_owned(),
+                    d.available_space(),
+                )
+            })
+            .collect()
+    }
+
     /// Send SIGTERM to `pid` via sysinfo's per-process handle. Returns true if
     /// the signal was delivered; false if the process is unknown to sysinfo or
     /// the kernel refused (typically EPERM). The next `refresh_processes` will
@@ -404,6 +426,54 @@ impl Default for Monitor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Distinguish user-data filesystems from kernel and snap pseudo-filesystems.
+/// Used by [`Monitor::refresh_disk_warnings`].
+fn is_real_mount(d: &sysinfo::Disk) -> bool {
+    let fs = d.file_system().to_string_lossy().to_lowercase();
+    if matches!(
+        fs.as_str(),
+        "tmpfs"
+            | "devtmpfs"
+            | "proc"
+            | "sysfs"
+            | "cgroup"
+            | "cgroup2"
+            | "overlay"
+            | "squashfs"
+            | "ramfs"
+            | "debugfs"
+            | "tracefs"
+            | "securityfs"
+            | "pstore"
+            | "bpf"
+            | "fusectl"
+            | "binfmt_misc"
+            | "configfs"
+            | "mqueue"
+            | "hugetlbfs"
+            | "autofs"
+            | "efivarfs"
+            | "nsfs"
+    ) {
+        return false;
+    }
+    let mp = d.mount_point().to_string_lossy();
+    if mp.starts_with("/proc/")
+        || mp.starts_with("/sys/")
+        || mp.starts_with("/dev/")
+        || mp.starts_with("/run/")
+        || mp.starts_with("/snap/")
+        || mp == "/boot/efi"
+    {
+        return false;
+    }
+    // Below ~1 GiB is almost certainly the ESP, /boot, or a ramdisk.
+    if d.total_space() < 1024 * 1024 * 1024 {
+        return false;
+    }
+    true
 }
 
 /// Convenience re-export so callers can sleep the recommended minimum between

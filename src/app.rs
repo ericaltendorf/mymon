@@ -24,6 +24,10 @@ pub enum ProcSort {
 /// covers very wide terminals (graph width is `2 * columns` dots).
 const HISTORY_CAP: usize = 2048;
 
+/// Trigger the low-disk-space warning when a real mount drops below this many
+/// bytes free. 8 GiB.
+const DISK_LOW_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024;
+
 /// A fixed-capacity rolling buffer of `f64` samples (oldest..newest).
 #[derive(Default)]
 pub struct History {
@@ -55,8 +59,14 @@ pub struct App {
     pub gpu_mem_history: History,
     pub stats_interval: Duration,
     pub process_interval: Duration,
+    pub disk_interval: Duration,
     last_stats: Instant,
     last_process: Instant,
+    last_disk: Instant,
+    /// Real mounts (path, bytes free) currently below [`DISK_LOW_THRESHOLD`].
+    /// Refreshed on the slow `disk_interval`; the overview block paints a red
+    /// warning across its bottom border whenever this is non-empty.
+    pub low_disks: Vec<(String, u64)>,
     pub should_quit: bool,
     /// Index of the selected row in the active process pane (0 = top).
     pub selected_index: usize,
@@ -83,17 +93,21 @@ impl App {
             gpu_mem_history: History::default(),
             stats_interval,
             process_interval,
+            disk_interval: Duration::from_secs(60),
             last_stats: Instant::now(),
             last_process: Instant::now(),
+            last_disk: Instant::now(),
+            low_disks: Vec::new(),
             should_quit: false,
             selected_index: 0,
             active_pane: ProcSort::Cpu,
             kill_prompt: None,
             show_help: false,
         };
-        // Prime once so the first frame has data (processes included).
+        // Prime once so the first frame has data (processes + disks included).
         app.on_stats_tick();
         app.on_process_tick();
+        app.on_disk_tick();
         app
     }
 
@@ -116,6 +130,12 @@ impl App {
         self.last_process = Instant::now();
     }
 
+    /// Refresh disk free-space and rebuild the low-disk warning list.
+    pub fn on_disk_tick(&mut self) {
+        self.low_disks = self.monitor.refresh_disk_warnings(DISK_LOW_THRESHOLD);
+        self.last_disk = Instant::now();
+    }
+
     /// Run any due ticks. Returns true if anything was refreshed (redraw hint).
     pub fn update(&mut self) -> bool {
         let now = Instant::now();
@@ -126,6 +146,10 @@ impl App {
         }
         if now.duration_since(self.last_process) >= self.process_interval {
             self.on_process_tick();
+            refreshed = true;
+        }
+        if now.duration_since(self.last_disk) >= self.disk_interval {
+            self.on_disk_tick();
             refreshed = true;
         }
         refreshed
@@ -196,7 +220,10 @@ impl App {
         let until_process = self
             .process_interval
             .saturating_sub(now.duration_since(self.last_process));
-        until_stats.min(until_process)
+        let until_disk = self
+            .disk_interval
+            .saturating_sub(now.duration_since(self.last_disk));
+        until_stats.min(until_process).min(until_disk)
     }
 }
 

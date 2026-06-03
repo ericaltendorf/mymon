@@ -75,6 +75,11 @@ GPU monitoring requires NVIDIA NVML (the `libnvidia-ml` library that
 ships with the proprietary driver). Without it, GPU rows simply read
 `--`.
 
+When a "real" disk mount (i.e. not a tmpfs/proc/sys/snap/EFI pseudo-fs)
+drops below 8 GiB free, the overview block's bottom border is overlaid
+with a red warning like `/ : 7G free` (multiple low mounts are
+separated with ` · `). Disk free space is sampled once a minute.
+
 ## Configuration
 
 Two env vars override the refresh cadences (milliseconds), useful on

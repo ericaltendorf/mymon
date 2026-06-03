@@ -222,6 +222,48 @@ fn render_overview(f: &mut Frame, area: Rect, app: &App) {
     // White ▴ tick marks on the bottom frame at one-minute intervals, counted
     // back from the right edge (newest sample).
     draw_time_ticks(f, graph, app.stats_interval.as_secs_f64());
+
+    // Low-disk warning paints over the bottom frame (drawn last so it wins
+    // any tick that would have lived in the same cell).
+    if !app.low_disks.is_empty() {
+        paint_disk_warning(f, area, &app.low_disks);
+    }
+}
+
+/// Paint a red, bold disk-low message across the bottom border of `area`,
+/// starting just after the left corner. Truncates if it would run past the
+/// right corner.
+fn paint_disk_warning(f: &mut Frame, area: Rect, low_disks: &[(String, u64)]) {
+    if area.width < 4 {
+        return;
+    }
+    let text = low_disks
+        .iter()
+        .map(|(mp, free)| {
+            let (n, u) = format::bytes_short(*free);
+            format!("{mp} : {n}{u} free")
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let pretty = format!(" {text} ");
+
+    let style = Style::new()
+        .fg(Color::Red)
+        .add_modifier(Modifier::BOLD);
+    let y = area.bottom() - 1;
+    let end_x = area.x + area.width - 1; // leave the right corner alone
+    let buf = f.buffer_mut();
+    let mut x = area.x + 1;
+    for ch in pretty.chars() {
+        if x >= end_x {
+            break;
+        }
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(ch);
+            cell.set_style(style);
+        }
+        x += 1;
+    }
 }
 
 /// Place a ▴ on the bottom border row at one-minute boundaries within the
