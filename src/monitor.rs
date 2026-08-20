@@ -22,7 +22,20 @@ use crate::metrics::*;
 /// Long-lived collector. Construct once with [`Monitor::new`], then call
 /// [`Monitor::refresh`] on a cadence to obtain [`Snapshot`]s.
 pub struct Monitor {
+    /// Drives CPU/memory stats on the fast `stats_interval`.
     system: System,
+    /// A *separate* `System` used only for the process table. This must not be
+    /// shared with `system`: sysinfo normalizes each process's CPU% by the
+    /// global CPU jiffies elapsed between the last two CPU refreshes on that
+    /// same `System`. If the process scan shared `system`, the frequent
+    /// `refresh_cpu_all()` stats ticks would keep advancing that denominator to
+    /// a sub-interval window while the process utime/stime numerator still spans
+    /// the full (slower) process interval — inflating every process's CPU% by
+    /// `process_interval / stats_interval` (~2x with the defaults). Giving the
+    /// process scan its own `System` means nothing else touches its CPU times,
+    /// so numerator and denominator span the same window and the figure matches
+    /// `top`.
+    proc_system: System,
     networks: Networks,
     disks: Disks,
     components: Components,
@@ -38,9 +51,13 @@ impl Monitor {
     /// Initialize all collectors. NVML is optional: if the driver/library is
     /// missing this still succeeds and simply reports no GPUs.
     pub fn new() -> Self {
-        let mut system = System::new_all();
+        let mut system = System::new();
         // Prime CPU counters so the first refresh produces meaningful deltas.
         system.refresh_cpu_all();
+
+        // The process table lives on its own `System` (see the field docs);
+        // left empty here and populated by the first `refresh_processes`.
+        let proc_system = System::new();
 
         let networks = Networks::new_with_refreshed_list();
         let disks = Disks::new_with_refreshed_list_specifics(
@@ -71,6 +88,7 @@ impl Monitor {
 
         Monitor {
             system,
+            proc_system,
             networks,
             disks,
             components,
@@ -163,7 +181,7 @@ impl Monitor {
     /// the kernel refused (typically EPERM). The next `refresh_processes` will
     /// pick up whether the process actually exited.
     pub fn kill(&self, pid: u32) -> bool {
-        self.system
+        self.proc_system
             .process(sysinfo::Pid::from_u32(pid))
             .and_then(|p| p.kill_with(sysinfo::Signal::Term))
             .unwrap_or(false)
@@ -178,7 +196,7 @@ impl Monitor {
         // `/proc/<pid>/task/<tid>` directory and count each thread as its own
         // process. On thread-heavy machines that explodes the scan cost; we
         // only care about real processes for the table, so skip tasks.
-        self.system.refresh_processes_specifics(
+        self.proc_system.refresh_processes_specifics(
             ProcessesToUpdate::All,
             true,
             ProcessRefreshKind::nothing()
@@ -398,7 +416,7 @@ impl Monitor {
         // We only refresh cpu/memory/user for processes, so `command`, `exe`
         // and per-process disk I/O are intentionally left empty here to keep the
         // (already infrequent) process scan cheap.
-        self.system
+        self.proc_system
             .processes()
             .values()
             .map(|p| {
